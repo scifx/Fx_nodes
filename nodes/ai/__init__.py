@@ -49,6 +49,34 @@ def _template(s: str, signal) -> str:
         return s
 
 
+def _inject_reference_context(node, engine, signal, text: str) -> str:
+    """Append optional cached/reference context for AI nodes.
+
+    Users can point an AI node at any msg/flow/global path. By Node-RED
+    convention the main message still lives in ``payload``; this is only an
+    optional extra reference source.
+    """
+    if not getattr(node, "use_reference_data", False):
+        return text
+    ref_path = (getattr(node, "reference_path", "") or "").strip()
+    if not ref_path:
+        return text
+    try:
+        ref = msgpath.get(ref_path, signal.msg, node.flow_context(engine), node.global_context(engine))
+    except Exception as e:
+        node._error = f"Reference read failed: {e}"
+        ref = None
+    if ref in (None, "", {}, []):
+        node.last_result = f"ref empty: {ref_path}"
+        return text
+    try:
+        ref_text = json.dumps(ref, ensure_ascii=False, indent=2, sort_keys=True)
+    except Exception:
+        ref_text = repr(ref)
+    node.last_result = f"ref ok: {ref_path} ({len(ref_text)} chars)"
+    return f"{text}\n\nReference data ({ref_path}):\n{ref_text}"
+
+
 def _strip_code_fence(text: str) -> str:
     t = (text or "").strip()
     if t.startswith("```"):
@@ -113,6 +141,21 @@ class _AIBase(FxBaseNode):
     model_override: StringProperty(name="Model", default="")
     temperature: FloatProperty(name="Temp", default=0.7, min=0.0, max=2.0)
     last_result: StringProperty(default="")
+    use_reference_data: BoolProperty(
+        name="Use Reference Data",
+        default=False,
+        description="从 msg/flow/global 路径读取缓存/前置信息，并追加给 AI 作为参考",
+    )
+    reference_path: StringProperty(
+        name="Reference",
+        default="payload",
+        description="Optional extra AI reference property. Default is payload; change when you explicitly want msg.xxx / flow.xxx / global.xxx scene context.",
+    )
+
+    def draw_reference_ui(self, layout):
+        layout.prop(self, "use_reference_data")
+        if self.use_reference_data:
+            layout.prop(self, "reference_path")
 
     def _run_async(self, engine, messages, on_done, **opts):
         """Offload network to runtime worker if present; else call inline."""
@@ -141,9 +184,14 @@ class AIChatNode(_AIBase):
     system: StringProperty(name="System", default="You are a helpful assistant inside Blender.")
     prompt: StringProperty(name="Prompt", default="Describe a procedural city in one sentence.")
     out_key: StringProperty(
-        name="Store To",
-        default="ai_text",
-        description="Node-RED msg path: ai_text, payload, msg.ai.text, flow.last_ai, global.note",
+        name="Target",
+        default="payload",
+        description="Where the generated message value is written. Default is payload; change only when you explicitly want another property.",
+    )
+    generate_on_flow: BoolProperty(
+        name="Generate On Flow",
+        default=False,
+        description="Allow runtime AI generation when a flow reaches this node. Disabled by default because it is slow and network-dependent.",
     )
 
     def init_sockets(self):
@@ -152,6 +200,8 @@ class AIChatNode(_AIBase):
     def draw_body(self, context, layout):
         layout.prop(self, "prompt", text="")
         layout.prop(self, "out_key")
+        layout.prop(self, "generate_on_flow")
+        self.draw_reference_ui(layout)
         col = layout.column(align=True)
         col.prop(self, "model_override", text="model")
         col.prop(self, "temperature")
@@ -160,10 +210,15 @@ class AIChatNode(_AIBase):
             box.label(text=self.last_result[:50], icon="CHECKMARK")
 
     def process(self, signal, engine):
+        if not self.generate_on_flow:
+            self._error = "运行时 AI 生成默认关闭；如需流程触发，请开启 Generate On Flow"
+            return []
+        user_prompt = _inject_reference_context(self, engine, signal, _template(self.prompt, signal))
         msgs = [
             {"role": "system", "content": self.system},
-            {"role": "user", "content": _template(self.prompt, signal)},
+            {"role": "user", "content": user_prompt},
         ]
+        self["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
         cont = signal.child()
 
         def done(text, err):
@@ -175,7 +230,6 @@ class AIChatNode(_AIBase):
                 msgpath.set(self.out_key, text, cont.msg, self.flow_context(engine), self.global_context(engine))
             except msgpath.MsgPathError as e:
                 self._error = str(e); return
-            # continue the flow from this node now that we have a result
             cont_engine = engine
             for out_sock, _ in [("▶", None)]:
                 cont_engine.continue_from(self.node_uid, out_sock, cont) if hasattr(cont_engine, "continue_from") else None
@@ -190,8 +244,8 @@ class AIExpressionNode(_AIBase):
 
     On flow input it ensures a safe sandbox expression exists, evaluates it
     against the current signal variables, stores the result through msgpath,
-    then continues the flow.  Generation is async like AI Chat; manual
-    Generate still exists for pre-building the expression.
+    then continues the flow. Manual Generate is the recommended default;
+    runtime generation is optional and disabled by default.
     """
     bl_idname = "FxAIExpression"
     bl_label = "AI → Expression"
@@ -204,14 +258,14 @@ class AIExpressionNode(_AIBase):
     )
     generated: StringProperty(name="Expression", default="")
     out_key: StringProperty(
-        name="Store To",
+        name="Target",
         default="payload",
-        description="Node-RED msg path: payload, msg.foo, flow.foo, global.foo",
+        description="Where the evaluated result is written. Default is payload; change only when you explicitly want another property.",
     )
     auto_generate: BoolProperty(
-        name="Auto Generate",
-        default=True,
-        description="If no valid expression exists, call the AI during flow execution and continue when it returns.",
+        name="Generate On Flow",
+        default=False,
+        description="If no valid expression exists, allow runtime AI generation during flow execution. Disabled by default because it is slow and network-dependent.",
     )
 
     SYS = (
@@ -239,11 +293,12 @@ class AIExpressionNode(_AIBase):
         layout.prop(self, "ask", text="")
         row = layout.row(align=True)
         row.operator("fx_nodes.ai_generate_expr", text="Generate", icon="SHADERFX").node_name = self.name
-        row.prop(self, "auto_generate", text="Auto")
+        row.prop(self, "auto_generate", text="On Flow")
         if self.generated:
             box = layout.box()
             box.label(text=self.generated[:96], icon="SCRIPT")
         layout.prop(self, "out_key")
+        self.draw_reference_ui(layout)
         col = layout.column(align=True)
         col.prop(self, "model_override", text="model")
         col.prop(self, "temperature")
@@ -277,10 +332,12 @@ class AIExpressionNode(_AIBase):
             self._error = "没有表达式；点击 Generate 或开启 Auto Generate"
             return []
 
+        user_prompt = _inject_reference_context(self, engine, signal, _template(self.ask, signal))
         msgs = [
             {"role": "system", "content": self.SYS},
-            {"role": "user", "content": _template(self.ask, signal)},
+            {"role": "user", "content": user_prompt},
         ]
+        self["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
         cont = signal.child()
 
         def done(text, err):
@@ -321,19 +378,24 @@ class AISceneCommandNode(_AIBase):
         description="Blender Text datablock containing the generated Python script.",
     )
     out_key: StringProperty(
-        name="Store Script To",
-        default="ai_scene_script",
-        description="Node-RED msg path where the generated script text is written.",
+        name="Script Target",
+        default="msg.script",
+        description="Where the generated script text is written. Kept separate by default so payload can remain the runtime result.",
     )
     result_key: StringProperty(
-        name="Store Result To",
-        default="ai_scene_result",
-        description="Node-RED msg path where execution result metadata is written.",
+        name="Result Property",
+        default="payload",
+        description="Where execution result metadata is written. Default is payload so downstream nodes/cache receive the scene result directly.",
     )
     execute_script: BoolProperty(
         name="Execute Script",
-        default=True,
-        description="Run the generated Blender Python script when a flow reaches this node. Full Python; review scripts before enabling in untrusted files.",
+        default=False,
+        description="Run the current Blender Python script when a flow reaches this node. Disabled by default for safety.",
+    )
+    auto_generate_on_flow: BoolProperty(
+        name="Generate On Flow",
+        default=False,
+        description="Allow runtime AI generation when a flow reaches this node. Disabled by default because it is slow, network-dependent, and potentially risky.",
     )
 
     SYS = (
@@ -432,9 +494,11 @@ class AISceneCommandNode(_AIBase):
             if len(lines) > 7:
                 box.label(text=f"… +{len(lines) - 7} more lines")
 
+        layout.prop(self, "auto_generate_on_flow")
         layout.prop(self, "execute_script")
         layout.prop(self, "out_key")
         layout.prop(self, "result_key")
+        self.draw_reference_ui(layout)
         col = layout.column(align=True)
         col.prop(self, "model_override", text="model")
         col.prop(self, "temperature")
@@ -460,32 +524,68 @@ class AISceneCommandNode(_AIBase):
         exec(compile(script, f"<Fx AI Scene Script {self.name}>", "exec"), ns, ns)  # noqa: S102 - explicit power-user AI script node
         return ns.get("result", result)
 
+    def _run_script_with_result(self, script, signal, engine):
+        compile(script, f"<Fx AI Scene Script {self.name}>", "exec")
+        exec_result = {"executed": False}
+        if self.execute_script:
+            exec_result = self._execute_script(script, signal, engine)
+            if exec_result is None:
+                exec_result = {"executed": True}
+            elif isinstance(exec_result, dict):
+                exec_result.setdefault("executed", True)
+        msgpath.set(self.result_key, exec_result, signal.msg, self.flow_context(engine), self.global_context(engine))
+        if self.result_key != "payload":
+            signal.msg["payload"] = exec_result
+        msgpath.set(self.out_key, script, signal.msg, self.flow_context(engine), self.global_context(engine))
+        self.last_result = msgpath.compact(exec_result, 80)
+        self._error = ""
+        return exec_result
+
     def process(self, signal, engine):
         script = self.get_script()
-        if not script:
-            self._error = "没有场景脚本；点击 Generate Script 生成 Python 脚本"
+
+        if not script and not self.auto_generate_on_flow:
+            self._error = "没有场景脚本；请先点击 Generate Script，或手动开启 Generate On Flow"
             return []
+
+        if not script and self.auto_generate_on_flow:
+            user_prompt = _inject_reference_context(self, engine, signal, _template(self.ask, signal))
+            msgs = [
+                {"role": "system", "content": self.SYS},
+                {"role": "user", "content": user_prompt},
+            ]
+            self["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
+            cont = signal.child()
+
+            def done(text, err):
+                if err:
+                    self._error = err
+                    return
+                try:
+                    script_text = self.set_script_text(text or "")
+                    self._run_script_with_result(script_text, cont, engine)
+                except Exception as e:
+                    self._error = str(e)
+                    return
+                if hasattr(engine, "continue_from"):
+                    engine.continue_from(self.node_uid, "▶", cont)
+
+            self._run_async(engine, msgs, done, max_tokens=512)
+            return []
+
         try:
-            compile(script, f"<Fx AI Scene Script {self.name}>", "exec")
-            msgpath.set(self.out_key, script, signal.msg, self.flow_context(engine), self.global_context(engine))
-            exec_result = {"executed": False}
-            if self.execute_script:
-                exec_result = self._execute_script(script, signal, engine)
-                if exec_result is None:
-                    exec_result = {"executed": True}
-                elif isinstance(exec_result, dict):
-                    exec_result.setdefault("executed", True)
-            msgpath.set(self.result_key, exec_result, signal.msg, self.flow_context(engine), self.global_context(engine))
+            self._run_script_with_result(script, signal, engine)
         except Exception as e:
             tb = traceback.format_exc(limit=3)
             self._error = f"{type(e).__name__}: {e}"
             try:
-                msgpath.set(self.result_key, {"executed": False, "error": str(e), "traceback": tb},
+                err_result = {"executed": False, "error": str(e), "traceback": tb}
+                msgpath.set(self.result_key, err_result,
                             signal.msg, self.flow_context(engine), self.global_context(engine))
+                if self.result_key != "payload":
+                    signal.msg["payload"] = err_result
             except Exception:
                 pass
             return []
-        self.last_result = msgpath.compact(exec_result, 80)
-        self._error = ""
         return self.flow_out(signal)
 

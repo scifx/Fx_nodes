@@ -1,4 +1,4 @@
-"""Node-RED-style data nodes: Debug, Change, Context, Get Property."""
+"""Node-RED-style data nodes: Debug, Change, Context, Get Property, Cache."""
 from __future__ import annotations
 
 import json
@@ -157,9 +157,9 @@ class ChangeNode(FxBaseNode):
         ("DELETE", "Delete", "Delete a msg/flow/global property"),
         ("MOVE", "Move", "Move a property to another path"),
     ], default="SET")
-    path: StringProperty(name="Path", default="payload")
+    path: StringProperty(name="Property", default="payload")
     value_expr: StringProperty(name="Value Expr", default="payload")
-    to_path: StringProperty(name="To Path", default="payload")
+    to_path: StringProperty(name="To", default="payload")
     last_value: StringProperty(name="Last", default="")
 
     def init_sockets(self):
@@ -218,7 +218,7 @@ class ContextNode(FxBaseNode):
         ("MSG_TO_GLOBAL", "Msg → Global", "Write msg/expression into global context"),
     ], default="GLOBAL_TO_MSG")
     context_key: StringProperty(name="Context Key", default="value")
-    msg_path: StringProperty(name="Msg Path", default="payload")
+    msg_path: StringProperty(name="Message Property", default="payload")
     value_expr: StringProperty(name="Value Expr", default="payload")
     last_value: StringProperty(name="Last", default="")
 
@@ -259,6 +259,173 @@ class ContextNode(FxBaseNode):
 
 
 @register_node
+class CacheNode(FxBaseNode):
+    """Persist one-shot or per-frame upstream msg data, defaulting to payload → payload like Node-RED."""
+    bl_idname = "FxCache"
+    bl_label = "Cache"
+    bl_icon = "FILE_CACHE"
+    category = "Data"
+    fx_color = (0.20, 0.30, 0.34)
+
+    source_path: StringProperty(
+        name="Source",
+        default="payload",
+        description="Message/context property to cache. Default is payload; you may also use msg.xxx / flow.xxx / global.xxx when needed.",
+    )
+    store_path: StringProperty(
+        name="Target",
+        default="payload",
+        description="Where the cached result is written. Default is payload; change only when you explicitly want another msg/flow/global property.",
+    )
+    mode: EnumProperty(
+        name="Mode",
+        items=[
+            ("ONCE", "Cache Once", "收到第一条数据后缓存，直到手动清理前都不更新"),
+            ("ALWAYS", "Always Update", "每次触发都更新缓存"),
+            ("PER_FRAME", "Per Frame", "每帧追加一次缓存，结果是数组"),
+        ],
+        default="ONCE",
+    )
+    write_to_msg: BoolProperty(
+        name="Mirror To msg.cache",
+        default=False,
+        description="Optional extra mirror. Off by default to keep payload as the primary Node-RED message path.",
+    )
+    fire_count: IntProperty(name="Fires", default=0)
+    cache_hits: IntProperty(name="Cache Hits", default=0)
+    max_rows: IntProperty(name="Preview Rows", default=8, min=1, max=32)
+
+    def init_sockets(self):
+        self.add_in_flow(); self.add_out_flow()
+
+    def _json_safe(self, value):
+        def safe(v):
+            try:
+                if isinstance(v, (int, float, str, bool)) or v is None:
+                    return v
+                if isinstance(v, (list, tuple)):
+                    return [safe(x) for x in v][:128]
+                if isinstance(v, dict):
+                    return {str(k): safe(x) for k, x in list(v.items())[:128]}
+                return f"{type(v).__name__}({v!r})"[:200]
+            except Exception:
+                return "<unrepr>"
+        return safe(value)
+
+    def _pretty(self, value):
+        try:
+            return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+        except Exception:
+            return repr(value)
+
+    def _preview_lines(self, data):
+        if data in ({}, None, ""):
+            return []
+        return self._pretty(data).splitlines()
+
+    def _get_cache_data(self):
+        raw = self.get("_cache_data", "")
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    def _set_cache_data(self, data):
+        safe = self._json_safe(data)
+        self["_cache_data"] = json.dumps(safe, ensure_ascii=False)
+        self["_preview"] = json.dumps(safe, ensure_ascii=False)
+        return safe
+
+    def clear_cache(self):
+        self["_cache_data"] = ""
+        self["_preview"] = "{}"
+        self["_cache_meta"] = json.dumps({}, ensure_ascii=False)
+        self.cache_hits = 0
+        self._error = ""
+
+    def _cache_exists(self):
+        raw = self.get("_cache_data", "")
+        return bool(raw)
+
+    def _store_into_contexts(self, signal, engine, value):
+        flow = self.flow_context(engine)
+        glob = self.global_context(engine)
+        msgpath.set(self.store_path, value, signal.msg, flow, glob)
+        if self.write_to_msg:
+            msgpath.set(f"msg.cache.{self.name}", value, signal.msg, flow, glob)
+        return value
+
+    def draw_body(self, context, layout):
+        layout.prop(self, "source_path")
+        layout.prop(self, "store_path")
+        row = layout.row(align=True)
+        row.prop(self, "mode", text="")
+        row.prop(self, "write_to_msg", text="Mirror")
+
+        row = layout.row(align=True)
+        row.label(text=f"Fires: {self.fire_count}", icon="DRIVER")
+        row.label(text=f"Hits: {self.cache_hits}", icon="FILE_CACHE")
+        row.prop(self, "max_rows", text="Rows")
+
+        op = layout.operator("fx_nodes.cache_clear_node", text="Clear Cache", icon="TRASH")
+        op.tree_name = self.id_data.name
+        op.node_name = self.name
+
+        raw = self.get("_preview", "{}")
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data = {}
+        lines = self._preview_lines(data)
+        box = layout.box()
+        if lines:
+            for line in lines[:self.max_rows]:
+                box.label(text=line[:120], icon="FILE_CACHE")
+            if len(lines) > self.max_rows:
+                box.label(text=f"… +{len(lines) - self.max_rows} more lines")
+        else:
+            box.label(text="(cache empty)", icon="INFO")
+
+    def process(self, signal, engine):
+        self.fire_count += 1
+        flow = self.flow_context(engine)
+        glob = self.global_context(engine)
+        frame = signal.context.get("frame")
+        try:
+            incoming = msgpath.get(self.source_path, signal.msg, flow, glob)
+        except msgpath.MsgPathError as e:
+            self._error = str(e)
+            return []
+
+        cached = self._get_cache_data()
+        meta = {"mode": self.mode, "source_path": self.source_path, "store_path": self.store_path, "frame": frame}
+
+        if self.mode == "ONCE":
+            if not self._cache_exists():
+                cached = self._set_cache_data(incoming)
+            else:
+                self.cache_hits += 1
+        elif self.mode == "ALWAYS":
+            cached = self._set_cache_data(incoming)
+        elif self.mode == "PER_FRAME":
+            if not isinstance(cached, list):
+                cached = []
+            cached.append({"frame": frame, "value": self._json_safe(incoming)})
+            cached = self._set_cache_data(cached)
+
+        self["_cache_meta"] = json.dumps(meta, ensure_ascii=False)
+        try:
+            self._store_into_contexts(signal, engine, cached)
+        except msgpath.MsgPathError as e:
+            self._error = str(e)
+            return []
+        self._error = ""
+        return self.flow_out(signal)
+
+
+@register_node
 class PropertyGetNode(FxBaseNode):
     """Read a safe Blender full data path into a msg path."""
     bl_idname = "FxPropertyGet"
@@ -268,7 +435,7 @@ class PropertyGetNode(FxBaseNode):
     fx_color = (0.24, 0.30, 0.16)
 
     path: StringProperty(name="Blender Full Path", default="")
-    out_path: StringProperty(name="Store To", default="payload")
+    out_path: StringProperty(name="Target", default="payload")
     last_value: StringProperty(name="Last", default="")
 
     def init_sockets(self):
@@ -278,15 +445,17 @@ class PropertyGetNode(FxBaseNode):
         layout.prop(self, "path", text="")
         layout.prop(self, "out_path")
         if self.last_value:
-            layout.label(text=f"{self.out_path} = {self.last_value}", icon="CHECKMARK")
+            layout.label(text=f"→ {self.last_value}", icon="CHECKMARK")
 
     def process(self, signal, engine):
+        flow = self.flow_context(engine)
+        glob = self.global_context(engine)
         try:
-            value = blender_path.get_path(self.path)
-            msgpath.set(self.out_path, value, signal.msg, self.flow_context(engine), self.global_context(engine))
+            val = blender_path.get_path(self.path)
+            msgpath.set(self.out_path, val, signal.msg, flow, glob)
         except (blender_path.PathError, msgpath.MsgPathError) as e:
             self._error = str(e)
             return []
-        self.last_value = repr(value)[:48]
+        self.last_value = msgpath.compact(val, 48)
         self._error = ""
         return self.flow_out(signal)

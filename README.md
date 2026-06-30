@@ -62,15 +62,15 @@ wall
 
 - **Trigger / Inject 类**：Timer、Frame、Key、Click、Scene、Start、Manual。
 - **Function**：完整 Python 代码能力，支持 `import`，返回 `msg` / `None` / `[msg, ...]`。
-- **Expression**：安全表达式，写入一个 msg/flow/global 路径。
-- **Change**：Set / Delete / Move 任意 `msg` / `flow` / `global` 路径。
+- **Expression**：安全表达式，默认写入 `msg.payload`，也可按需写到其它 `msg/flow/global` 属性。
+- **Change**：Set / Delete / Move 任意 `msg` / `flow` / `global` 属性。
 - **Switch**：表达式条件分流 True / False。
 - **Gate / Counter / Delay**：常用控制流节点。
 - **Get Property**：读取 Blender `Copy Full Data Path` 到 msg 路径。
 - **Set Property**：把表达式结果写入 Blender full data path。
 - **Context**：显式读写 flow/global context。
 - **Debug**：Node-RED debug 节点；按路径查看 `msg`、`payload`、`flow.xxx`、`global.xxx`。
-- **AI 节点**：保留为辅助生成文本/表达式/场景指令。
+- **AI 节点**：默认也遵循 `msg.payload` 输入/输出；必要时可显式写入 `msg` 的其它字段，或读取 `msg/flow/global` 里的场景参考信息。默认不在运行时自动调用网络生成，需显式开启对应的 `Generate On Flow` 选项。
 
 ## Function 节点
 
@@ -129,6 +129,9 @@ build_all()
 - Frame → Get Property → Debug
 - Key → Counter → Expression → Set Property → Debug
 - Manual → Function → Debug
+- Function(收集场景信息到 payload 或 msg.scene) → Cache(默认 payload→payload，也可缓存到其它属性) → AI 节点(默认处理 payload，可选读取额外 reference)
+- AI Scene Script 默认把生成的脚本写到 `msg.script`，把执行结果写到 `payload`，这样下游 Cache / AI 会拿到场景结果而不是脚本文本。
+- AI Scene Script 默认**不**在运行时自动生成，也默认**不**自动执行脚本；需要时再显式开启 `Generate On Flow` / `Execute Script`。
 
 ## 超简单节点 API
 

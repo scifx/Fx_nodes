@@ -146,7 +146,7 @@ class ExpressionNode(FxLogicNode):
         default="payload",
         description="安全表达式；可用 msg/payload/topic/flow/G/global_context/frame/time",
     )
-    out_path: StringProperty(name="Store To", default="payload")
+    out_path: StringProperty(name="Target", default="payload")
     live_value: StringProperty(name="Last", default="")
 
     def init_sockets(self):
@@ -249,7 +249,7 @@ class CounterNode(FxLogicNode):
     bl_label = "Counter"
     bl_icon = "LINENUMBERS_ON"
 
-    path: StringProperty(name="Store To", default="payload")
+    path: StringProperty(name="Target", default="payload")
     step: FloatProperty(name="Step", default=1.0)
     reset_at: FloatProperty(name="Wrap At (0=off)", default=0.0)
 

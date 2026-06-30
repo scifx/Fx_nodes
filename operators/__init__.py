@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 import bpy
 from bpy.types import Operator
 from bpy.props import StringProperty, EnumProperty
@@ -306,6 +307,33 @@ class FXNODES_OT_debug_clear_all(Operator):
         return {'FINISHED'}
 
 
+class FXNODES_OT_cache_clear_node(Operator):
+    bl_idname = "fx_nodes.cache_clear_node"
+    bl_label = "Clear Cache Node"
+    bl_description = "Clear one Cache node preview and stored cache"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    tree_name: StringProperty()
+    node_name: StringProperty()
+
+    def execute(self, context):
+        tree = bpy.data.node_groups.get(self.tree_name)
+        node = tree.nodes.get(self.node_name) if tree else None
+        if node is None or getattr(node, "bl_idname", "") != "FxCache":
+            self.report({'ERROR'}, "Cache node not found")
+            return {'CANCELLED'}
+        try:
+            if hasattr(node, "clear_cache"):
+                node.clear_cache()
+            else:
+                node["_cache_data"] = ""
+                node["_preview"] = "{}"
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
 class FXNODES_OT_test_ai(Operator):
     bl_idname = "fx_nodes.test_ai"
     bl_label = "Test AI Connection"
@@ -341,9 +369,15 @@ class FXNODES_OT_ai_generate_expr(Operator):
         prov = make_provider("openai-compat", base_url=node.base_url_override or p.ai_base_url,
                              api_key=p.ai_api_key, model=node.model_override or p.ai_model)
         try:
-            text = prov.complete(
-                [{"role": "system", "content": node.SYS},
-                 {"role": "user", "content": node.ask}], temperature=0.2, max_tokens=64)
+            from ..nodes.ai import _inject_reference_context
+            tree = getattr(context.space_data, "edit_tree", None)
+            engine = getattr(tree, "fx_engine", None) if tree is not None else None
+            fake_signal = SimpleNamespace(msg={"payload": None}, context={})
+            user_text = _inject_reference_context(node, engine, fake_signal, node.ask)
+            msgs = [{"role": "system", "content": node.SYS},
+                    {"role": "user", "content": user_text}]
+            node["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
+            text = prov.complete(msgs, temperature=0.2, max_tokens=64)
         except Exception as e:
             self.report({'ERROR'}, str(e)); return {'CANCELLED'}
         if node.validate_and_store(text):
@@ -369,9 +403,15 @@ class FXNODES_OT_ai_scene_plan(Operator):
         prov = make_provider("openai-compat", base_url=node.base_url_override or p.ai_base_url,
                              api_key=p.ai_api_key, model=node.model_override or p.ai_model)
         try:
-            text = prov.complete(
-                [{"role": "system", "content": node.SYS},
-                 {"role": "user", "content": node.ask}], temperature=0.1, max_tokens=512)
+            from ..nodes.ai import _inject_reference_context
+            tree = getattr(context.space_data, "edit_tree", None)
+            engine = getattr(tree, "fx_engine", None) if tree is not None else None
+            fake_signal = SimpleNamespace(msg={"payload": None}, context={})
+            user_text = _inject_reference_context(node, engine, fake_signal, node.ask)
+            msgs = [{"role": "system", "content": node.SYS},
+                    {"role": "user", "content": user_text}]
+            node["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
+            text = prov.complete(msgs, temperature=0.1, max_tokens=512)
             if hasattr(node, "set_plan_text"):
                 node.set_plan_text(text)
             else:
@@ -391,6 +431,7 @@ CLASSES = [
     FXNODES_OT_paste_property_menu, FXNODES_OT_paste_property_node,
     FXNODES_OT_open_text_editor, FXNODES_OT_function_new_text,
     FXNODES_OT_debug_clear_node, FXNODES_OT_debug_clear_all,
+    FXNODES_OT_cache_clear_node,
     FXNODES_OT_test_ai, FXNODES_OT_ai_generate_expr, FXNODES_OT_ai_scene_plan,
 ]
 
