@@ -1,0 +1,20 @@
+schema_version = "1.0.0"
+
+id = "nexus_nodes"
+version = "0.1.0"
+name = "NEXUS Nodes"
+tagline = "Event-driven scripting nodes: triggers, expressions, data preview, AI"
+maintainer = "Arena.ai Agent <agent@arena.ai>"
+type = "add-on"
+
+blender_version_min = "4.3.0"
+
+# Node category in the editor
+tags = ["Node", "Animation", "Development"]
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+# No third-party python deps: AI uses stdlib urllib only.
+
+[permissions]
+network = "AI 节点访问 OpenAI 兼容端点（可选，受偏好设置开关控制）"

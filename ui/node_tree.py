@@ -1,0 +1,48 @@
+"""The custom node editor type and the bpy-backed GraphAdapter."""
+from __future__ import annotations
+
+import bpy
+from bpy.types import NodeTree
+
+from ..core.engine import GraphAdapter
+
+
+class NexusNodeTree(NodeTree):
+    bl_idname = "NexusNodeTree"
+    bl_label = "NEXUS Logic"
+    bl_icon = "NODETREE"
+
+
+class BpyGraphAdapter(GraphAdapter):
+    """Bridges the engine to a live NexusNodeTree.
+
+    uid format: "<node.name>" within a single tree (the adapter is per-tree).
+    """
+    def __init__(self, tree: NexusNodeTree):
+        self.tree = tree
+        self._uid_to_node = {}
+        self.reindex()
+
+    def reindex(self):
+        self._uid_to_node = {n.node_uid: n for n in self.tree.nodes if hasattr(n, "node_uid")}
+
+    def get_node(self, uid):
+        node = self._uid_to_node.get(uid)
+        if node is None:
+            self.reindex()
+            node = self._uid_to_node.get(uid)
+        return node
+
+    def downstream(self, uid, out_socket):
+        node = self.get_node(uid)
+        if node is None:
+            return
+        sock = node.outputs.get(out_socket)
+        if sock is None:
+            return
+        for link in sock.links:
+            if not link.is_valid:
+                continue
+            tgt = link.to_node
+            if hasattr(tgt, "node_uid"):
+                yield (tgt.node_uid, link.to_socket.name)
