@@ -1,35 +1,38 @@
-"""Data nodes: preview/inspect signals, store variables, read scene props."""
+"""Node-RED-style data nodes: Debug, Change, Context, Get Property."""
 from __future__ import annotations
 
 import json
-import bpy
-from bpy.props import StringProperty, IntProperty, FloatProperty, EnumProperty, BoolProperty
+from bpy.props import StringProperty, IntProperty, EnumProperty, BoolProperty
 
-from ...core.base import NexusBaseNode
+from ...core.base import FxBaseNode
 from ...core.registry import register_node
+from ...core import expr, msgpath
+from ...core import path as blender_path
 
 
 @register_node
-class DataPreviewNode(NexusBaseNode):
-    """数据预览器：把流经的 signal payload 实时快照，画在节点体里。
+class DebugNode(FxBaseNode):
+    """Node-RED-like Debug node.
 
-    它是透明的——信号原样继续向下流；同时把最新快照存到 self['_preview'] 供
-    节点体绘制和全局 Inspector 面板读取。
+    It previews a path from msg/flow/global. Examples: ``msg``, ``payload``,
+    ``msg.payload``, ``topic``, ``flow.count``, ``global.seed``.
     """
-    bl_idname = "NexusDataPreview"
-    bl_label = "Data Preview"
+    bl_idname = "FxDebug"
+    bl_label = "Debug"
     bl_icon = "VIEWZOOM"
     category = "Data"
-    nexus_color = (0.32, 0.28, 0.12)
+    fx_color = (0.32, 0.28, 0.12)
 
+    path: StringProperty(name="Path", default="msg")
     max_rows: IntProperty(name="Max Rows", default=8, min=1, max=32)
     fire_count: IntProperty(name="Fires", default=0)
-    show_context: BoolProperty(name="Show Context", default=False)
+    show_context: BoolProperty(name="Show Runtime Context", default=False)
 
     def init_sockets(self):
         self.add_in_flow(); self.add_out_flow()
 
     def draw_body(self, context, layout):
+        layout.prop(self, "path")
         layout.label(text=f"Fires: {self.fire_count}", icon="DRIVER")
         raw = self.get("_preview", "{}")
         try:
@@ -37,99 +40,198 @@ class DataPreviewNode(NexusBaseNode):
         except Exception:
             data = {}
         box = layout.box()
-        if not data:
-            box.label(text="(no data yet)", icon="INFO")
-        for i, (k, val) in enumerate(data.items()):
-            if i >= self.max_rows:
-                box.label(text=f"… +{len(data) - self.max_rows} more")
-                break
-            row = box.row()
-            row.label(text=str(k))
-            row.label(text=str(val)[:28])
-        layout.prop(self, "show_context", text="Context")
+        if isinstance(data, dict):
+            if not data:
+                box.label(text="(no data yet)", icon="INFO")
+            for i, (k, val) in enumerate(data.items()):
+                if i >= self.max_rows:
+                    box.label(text=f"… +{len(data) - self.max_rows} more")
+                    break
+                row = box.row()
+                row.label(text=str(k))
+                row.label(text=str(val)[:30])
+        else:
+            box.label(text=str(data)[:80])
+        layout.prop(self, "show_context")
+
+    def _json_safe(self, value):
+        def safe(v):
+            try:
+                if isinstance(v, (int, float, str, bool)) or v is None:
+                    return v
+                if isinstance(v, (list, tuple)):
+                    return [safe(x) for x in v][:64]
+                if isinstance(v, dict):
+                    return {str(k): safe(x) for k, x in list(v.items())[:64]}
+                return f"{type(v).__name__}({v!r})"[:160]
+            except Exception:
+                return "<unrepr>"
+        return safe(value)
 
     def process(self, signal, engine):
         self.fire_count += 1
-        snap = signal.snapshot()
-        if self.show_context:
-            snap = {**snap, **{f"@{k}": v for k, v in signal.context.items()}}
+        flow = self.flow_context(engine)
+        glob = self.global_context(engine)
         try:
-            self["_preview"] = json.dumps(snap, ensure_ascii=False)
+            value = msgpath.get(self.path, signal.msg, flow, glob)
+        except msgpath.MsgPathError as e:
+            self._error = str(e)
+            return []
+        data = self._json_safe(value)
+        if self.show_context:
+            data = {"value": data, "context": self._json_safe(signal.context)}
+        try:
+            self["_preview"] = json.dumps(data, ensure_ascii=False)
         except Exception:
-            self["_preview"] = "{}"
+            self["_preview"] = json.dumps(repr(value)[:160], ensure_ascii=False)
+        self._error = ""
         return self.flow_out(signal)
 
 
 @register_node
-class VariableNode(NexusBaseNode):
-    """变量存储：写/读跨点火持久的变量（存在引擎运行时字典）。"""
-    bl_idname = "NexusVariable"
-    bl_label = "Variable"
+class ChangeNode(FxBaseNode):
+    """Node-RED-like Change node for msg/flow/global paths."""
+    bl_idname = "FxChange"
+    bl_label = "Change"
     bl_icon = "RNA"
     category = "Data"
-    nexus_color = (0.3, 0.28, 0.14)
+    fx_color = (0.24, 0.30, 0.16)
 
-    var_name: StringProperty(name="Name", default="myVar")
     mode: EnumProperty(name="Mode", items=[
-        ("WRITE", "Write from payload", ""),
-        ("READ", "Read into payload", ""),
-    ], default="READ")
-    source_key: StringProperty(name="Key", default="result")
+        ("SET", "Set", "Set a msg/flow/global property"),
+        ("DELETE", "Delete", "Delete a msg/flow/global property"),
+        ("MOVE", "Move", "Move a property to another path"),
+    ], default="SET")
+    path: StringProperty(name="Path", default="payload")
+    value_expr: StringProperty(name="Value Expr", default="payload")
+    to_path: StringProperty(name="To Path", default="payload")
+    last_value: StringProperty(name="Last", default="")
 
     def init_sockets(self):
-        self.add_in_flow(); self.add_out_flow(); self.add_out("NexusDataSocket", "value")
+        self.add_in_flow(); self.add_out_flow()
 
     def draw_body(self, context, layout):
-        layout.prop(self, "var_name"); layout.prop(self, "mode", text=""); layout.prop(self, "source_key")
-
-    def _store(self, engine):
-        return engine.__dict__.setdefault("_variables", {})
+        layout.prop(self, "mode", text="")
+        layout.prop(self, "path")
+        if self.mode == "SET":
+            layout.prop(self, "value_expr")
+        elif self.mode == "MOVE":
+            layout.prop(self, "to_path")
+        if self.last_value:
+            layout.label(text=self.last_value[:60], icon="CHECKMARK")
 
     def process(self, signal, engine):
-        store = self._store(engine)
-        if self.mode == "WRITE":
-            store[self.var_name] = signal.get(self.source_key)
-            return self.flow_out(signal)
-        else:
-            return self.flow_out(signal, **{self.source_key: store.get(self.var_name)})
-
-    def compute(self, socket_name, signal, engine):
-        return self._store(engine).get(self.var_name)
+        flow = self.flow_context(engine)
+        glob = self.global_context(engine)
+        try:
+            if self.mode == "SET":
+                val = expr.evaluate(self.value_expr, self.expr_vars(signal, engine))
+                msgpath.set(self.path, val, signal.msg, flow, glob)
+                self.last_value = f"{self.path} = {msgpath.compact(val, 40)}"
+            elif self.mode == "DELETE":
+                msgpath.delete(self.path, signal.msg, flow, glob)
+                self.last_value = f"deleted {self.path}"
+            elif self.mode == "MOVE":
+                val = msgpath.get(self.path, signal.msg, flow, glob)
+                msgpath.set(self.to_path, val, signal.msg, flow, glob)
+                msgpath.delete(self.path, signal.msg, flow, glob)
+                self.last_value = f"{self.path} → {self.to_path}"
+        except (expr.ExprError, msgpath.MsgPathError) as e:
+            self._error = str(e)
+            return []
+        self._error = ""
+        return self.flow_out(signal)
 
 
 @register_node
-class ScenePropertyNode(NexusBaseNode):
-    """场景属性读取：读取 frame_current / fps / 选中数等到 payload。"""
-    bl_idname = "NexusSceneProperty"
-    bl_label = "Scene Property"
-    bl_icon = "SCENE_DATA"
-    category = "Data"
-    nexus_color = (0.3, 0.28, 0.14)
+class ContextNode(FxBaseNode):
+    """Explicit Node-RED context helper.
 
-    prop: EnumProperty(name="Property", items=[
-        ("frame", "Current Frame", ""), ("fps", "FPS", ""),
-        ("selected", "Selected Count", ""), ("objects", "Object Count", ""),
-        ("time", "Time (s)", ""),
-    ], default="frame")
-    key: StringProperty(name="Key", default="frame")
+    Change can already operate on flow/global paths.  This node is a more
+    discoverable shorthand for common context operations.
+    """
+    bl_idname = "FxContext"
+    bl_label = "Context"
+    bl_icon = "WORLD"
+    category = "Data"
+    fx_color = (0.22, 0.24, 0.34)
+
+    mode: EnumProperty(name="Mode", items=[
+        ("FLOW_TO_MSG", "Flow → Msg", "Read flow context into msg"),
+        ("MSG_TO_FLOW", "Msg → Flow", "Write msg/expression into flow context"),
+        ("GLOBAL_TO_MSG", "Global → Msg", "Read global context into msg"),
+        ("MSG_TO_GLOBAL", "Msg → Global", "Write msg/expression into global context"),
+    ], default="GLOBAL_TO_MSG")
+    context_key: StringProperty(name="Context Key", default="value")
+    msg_path: StringProperty(name="Msg Path", default="payload")
+    value_expr: StringProperty(name="Value Expr", default="payload")
+    last_value: StringProperty(name="Last", default="")
 
     def init_sockets(self):
-        self.add_in_flow(); self.add_out_flow(); self.add_out("NexusNumberSocket", "value")
+        self.add_in_flow(); self.add_out_flow()
 
     def draw_body(self, context, layout):
-        layout.prop(self, "prop", text=""); layout.prop(self, "key")
-
-    def _read(self):
-        sc = bpy.context.scene
-        if self.prop == "frame": return sc.frame_current
-        if self.prop == "fps": return sc.render.fps
-        if self.prop == "selected": return len(bpy.context.selected_objects)
-        if self.prop == "objects": return len(sc.objects)
-        if self.prop == "time": return sc.frame_current / sc.render.fps
-        return 0
+        layout.prop(self, "mode", text="")
+        layout.prop(self, "context_key")
+        layout.prop(self, "msg_path")
+        if self.mode in {"MSG_TO_FLOW", "MSG_TO_GLOBAL"}:
+            layout.prop(self, "value_expr")
+        if self.last_value:
+            layout.label(text=self.last_value[:60], icon="CHECKMARK")
 
     def process(self, signal, engine):
-        return self.flow_out(signal, **{self.key: self._read()})
+        flow = self.flow_context(engine)
+        glob = self.global_context(engine)
+        try:
+            if self.mode == "FLOW_TO_MSG":
+                val = flow.get(self.context_key)
+                msgpath.set(self.msg_path, val, signal.msg, flow, glob)
+            elif self.mode == "GLOBAL_TO_MSG":
+                val = glob.get(self.context_key)
+                msgpath.set(self.msg_path, val, signal.msg, flow, glob)
+            elif self.mode == "MSG_TO_FLOW":
+                val = expr.evaluate(self.value_expr, self.expr_vars(signal, engine))
+                flow[self.context_key] = val
+            elif self.mode == "MSG_TO_GLOBAL":
+                val = expr.evaluate(self.value_expr, self.expr_vars(signal, engine))
+                glob[self.context_key] = val
+            self.last_value = msgpath.compact(val, 50)
+        except (expr.ExprError, msgpath.MsgPathError) as e:
+            self._error = str(e)
+            return []
+        self._error = ""
+        return self.flow_out(signal)
 
-    def compute(self, socket_name, signal, engine):
-        return self._read()
+
+@register_node
+class PropertyGetNode(FxBaseNode):
+    """Read a safe Blender full data path into a msg path."""
+    bl_idname = "FxPropertyGet"
+    bl_label = "Get Property"
+    bl_icon = "RNA"
+    category = "Data"
+    fx_color = (0.24, 0.30, 0.16)
+
+    path: StringProperty(name="Blender Full Path", default="")
+    out_path: StringProperty(name="Store To", default="payload")
+    last_value: StringProperty(name="Last", default="")
+
+    def init_sockets(self):
+        self.add_in_flow(); self.add_out_flow()
+
+    def draw_body(self, context, layout):
+        layout.prop(self, "path", text="")
+        layout.prop(self, "out_path")
+        if self.last_value:
+            layout.label(text=f"{self.out_path} = {self.last_value}", icon="CHECKMARK")
+
+    def process(self, signal, engine):
+        try:
+            value = blender_path.get_path(self.path)
+            msgpath.set(self.out_path, value, signal.msg, self.flow_context(engine), self.global_context(engine))
+        except (blender_path.PathError, msgpath.MsgPathError) as e:
+            self._error = str(e)
+            return []
+        self.last_value = repr(value)[:48]
+        self._error = ""
+        return self.flow_out(signal)

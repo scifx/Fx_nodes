@@ -1,82 +1,76 @@
-"""Example graph builders. Run inside Blender's text editor or via operator.
-
-Each function builds a ready-to-run NexusNodeTree demonstrating the system.
-Call build_all() then Start the engine from the N-panel.
-"""
+"""Example graph builders for the Node-RED-style Fx Nodes model."""
 from __future__ import annotations
 
 import bpy
 
 
 def _new_tree(name):
-    tree = bpy.data.node_groups.new(name, "NexusNodeTree")
-    return tree
+    return bpy.data.node_groups.new(name, "FxNodeTree")
 
 
 def _link(tree, a, aout, b, bin="▶"):
     tree.links.new(a.outputs[aout], b.inputs[bin])
 
 
-def example_pulsing_cube():
-    """Timer -> Expression(sin) -> Transform -> Data Preview.
-    A cube pulses up/down on a timer. Classic 'hello world' of the system."""
-    tree = _new_tree("NEXUS · Pulsing Cube")
+def example_pulsing_active_object():
+    """Timer -> Expression -> Set Property -> Debug."""
+    tree = _new_tree("Fx Nodes · Pulsing Active Object")
     n = tree.nodes
-    trig = n.new("NexusTimerTrigger"); trig.location = (-600, 0); trig.interval = 0.1
-    expr = n.new("NexusExpression"); expr.location = (-380, 0)
-    expr.expression = "sin(wall * 3) * 1.5"; expr.out_key = "z"
-    tr = n.new("NexusTransform"); tr.location = (-120, 0)
-    tr.channel = "location"; tr.expr_z = "z"
-    prev = n.new("NexusDataPreview"); prev.location = (160, 0)
-    _link(tree, trig, "▶", expr); _link(tree, expr, "▶", tr); _link(tree, tr, "▶", prev)
+    trig = n.new("FxTimerTrigger"); trig.location = (-650, 0); trig.interval = 0.1
+    ex = n.new("FxExpression"); ex.location = (-420, 0)
+    ex.expression = "sin(wall * 3) * 1.5"; ex.out_path = "payload"
+    setp = n.new("FxPropertySet"); setp.location = (-140, 0)
+    setp.path = 'bpy.context.object.location[2]'; setp.value_expr = "payload"
+    dbg = n.new("FxDebug"); dbg.location = (140, 0); dbg.path = "msg"
+    _link(tree, trig, "▶", ex); _link(tree, ex, "▶", setp); _link(tree, setp, "▶", dbg)
     return tree
 
 
-def example_key_spawner():
-    """Key(SPACE) -> Counter -> CreateMesh(at row) -> Preview.
-    Press SPACE to spawn cubes in a growing row."""
-    tree = _new_tree("NEXUS · Key Spawner")
+def example_read_scene_frame():
+    """Frame Trigger -> Get Property -> Debug."""
+    tree = _new_tree("Fx Nodes · Read Scene Frame")
     n = tree.nodes
-    trig = n.new("NexusKeyTrigger"); trig.location = (-600, 0); trig.key = "SPACE"
-    cnt = n.new("NexusCounter"); cnt.location = (-380, 0); cnt.key = "count"; cnt.step = 1
-    mk = n.new("NexusCreateMesh"); mk.location = (-120, 0)
-    mk.primitive = "cube"; mk.loc_expr = "(count*2, 0, 0)"
-    prev = n.new("NexusDataPreview"); prev.location = (180, 0)
-    _link(tree, trig, "▶", cnt); _link(tree, cnt, "▶", mk); _link(tree, mk, "▶", prev)
+    trig = n.new("FxFrameTrigger"); trig.location = (-500, 0)
+    getp = n.new("FxPropertyGet"); getp.location = (-240, 0)
+    getp.path = 'bpy.context.scene.frame_current'; getp.out_path = "payload"
+    dbg = n.new("FxDebug"); dbg.location = (40, 0); dbg.path = "payload"
+    _link(tree, trig, "▶", getp); _link(tree, getp, "▶", dbg)
     return tree
 
 
-def example_frame_keyframer():
-    """Frame -> Expression -> Transform -> Keyframe.
-    Bakes procedural motion into keyframes as the timeline plays."""
-    tree = _new_tree("NEXUS · Frame Keyframer")
+def example_key_sets_scale():
+    """Key(SPACE) -> Counter -> Expression -> Set Property x/y/z -> Debug."""
+    tree = _new_tree("Fx Nodes · Key Sets Scale")
     n = tree.nodes
-    trig = n.new("NexusFrameTrigger"); trig.location = (-620, 0)
-    ex = n.new("NexusExpression"); ex.location = (-400, 0)
-    ex.expression = "sin(frame * 0.2) * 3"; ex.out_key = "x"
-    tr = n.new("NexusTransform"); tr.location = (-150, 0); tr.expr_x = "x"; tr.expr_z = ""
-    kf = n.new("NexusKeyframe"); kf.location = (110, 0); kf.data_path = "location"
-    _link(tree, trig, "▶", ex); _link(tree, ex, "▶", tr); _link(tree, tr, "▶", kf)
+    trig = n.new("FxKeyTrigger"); trig.location = (-720, 0); trig.key = "SPACE"
+    cnt = n.new("FxCounter"); cnt.location = (-500, 0); cnt.path = "count"; cnt.step = 1; cnt.reset_at = 6
+    ex = n.new("FxExpression"); ex.location = (-280, 0)
+    ex.expression = "1 + count * 0.15"; ex.out_path = "payload"
+    sx = n.new("FxPropertySet"); sx.location = (0, 80); sx.path = 'bpy.context.object.scale[0]'; sx.value_expr = "payload"
+    sy = n.new("FxPropertySet"); sy.location = (0, -40); sy.path = 'bpy.context.object.scale[1]'; sy.value_expr = "payload"
+    sz = n.new("FxPropertySet"); sz.location = (0, -160); sz.path = 'bpy.context.object.scale[2]'; sz.value_expr = "payload"
+    dbg = n.new("FxDebug"); dbg.location = (280, 0); dbg.path = "msg"
+    _link(tree, trig, "▶", cnt); _link(tree, cnt, "▶", ex)
+    _link(tree, ex, "▶", sx); _link(tree, sx, "▶", sy); _link(tree, sy, "▶", sz); _link(tree, sz, "▶", dbg)
     return tree
 
 
-def example_ai_modeling():
-    """Manual -> AI Scene Command -> Preview.
-    Type an instruction, click Plan, then Fire to let the AI build geometry."""
-    tree = _new_tree("NEXUS · AI Modeling")
+def example_function_node():
+    """Manual -> Function -> Debug."""
+    tree = _new_tree("Fx Nodes · Function")
     n = tree.nodes
-    trig = n.new("NexusManualTrigger"); trig.location = (-500, 0)
-    ai = n.new("NexusAISceneCommand"); ai.location = (-250, 0)
-    ai.ask = "create 6 spheres arranged in a circle of radius 4"
-    prev = n.new("NexusDataPreview"); prev.location = (60, 0)
-    _link(tree, trig, "▶", ai); _link(tree, ai, "▶", prev)
+    trig = n.new("FxManualTrigger"); trig.location = (-500, 0)
+    fn = n.new("FxFunction"); fn.location = (-250, 0)
+    fn.code = "import math\nmsg['payload'] = math.sqrt(msg.get('payload', 9))\nmsg['topic'] = 'sqrt'\nreturn msg"
+    dbg = n.new("FxDebug"); dbg.location = (60, 0); dbg.path = "msg"
+    _link(tree, trig, "▶", fn); _link(tree, fn, "▶", dbg)
     return tree
 
 
 def build_all():
-    trees = [example_pulsing_cube(), example_key_spawner(),
-             example_frame_keyframer(), example_ai_modeling()]
-    print("[NEXUS] built examples:", [t.name for t in trees])
+    trees = [example_pulsing_active_object(), example_read_scene_frame(),
+             example_key_sets_scale(), example_function_node()]
+    print("[Fx Nodes] built examples:", [t.name for t in trees])
     return trees
 
 

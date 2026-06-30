@@ -1,7 +1,8 @@
 """Add-menu categories, built dynamically from the registry.
 
-Uses the modern extend_menu approach (4.x) instead of the deprecated
-nodeitems_utils, so new nodes appear automatically by category.
+Inside an FxNodeTree the Add menu should not contain an extra "Fx Nodes" root:
+the user is already in the Fx Nodes editor.  We therefore expose category
+submenus directly: Trigger / Logic / Action / Data / AI / Utility.
 """
 from __future__ import annotations
 
@@ -19,7 +20,8 @@ _submenu_classes = []
 
 
 def _make_submenu(cat):
-    idname = f"NEXUS_MT_add_{cat.lower()}"
+    safe = "".join(ch if ch.isalnum() else "_" for ch in cat.lower())
+    idname = f"FXNODES_MT_add_{safe}"
 
     def draw(self, context):
         layout = self.layout
@@ -36,19 +38,13 @@ def _make_submenu(cat):
     })
 
 
-class NEXUS_MT_add_root(Menu):
-    bl_idname = "NEXUS_MT_add_root"
-    bl_label = "NEXUS"
-
-    def draw(self, context):
-        layout = self.layout
-        for cat in ordered_categories():
-            layout.menu(f"NEXUS_MT_add_{cat.lower()}", icon=_CAT_ICON.get(cat, "DOT"))
-
-
 def _add_menu_entry(self, context):
-    if getattr(context.space_data, "tree_type", "") == "NexusNodeTree":
-        self.layout.menu("NEXUS_MT_add_root", icon="NODETREE")
+    if getattr(context.space_data, "tree_type", "") != "FxNodeTree":
+        return
+    layout = self.layout
+    layout.separator()
+    for c in _submenu_classes:
+        layout.menu(c.bl_idname, icon=_CAT_ICON.get(c.bl_label, "DOT"))
 
 
 def register():
@@ -56,17 +52,12 @@ def register():
     _submenu_classes = [_make_submenu(cat) for cat in ordered_categories()]
     for c in _submenu_classes:
         bpy.utils.register_class(c)
-    bpy.utils.register_class(NEXUS_MT_add_root)
     bpy.types.NODE_MT_add.append(_add_menu_entry)
 
 
 def unregister():
     try:
         bpy.types.NODE_MT_add.remove(_add_menu_entry)
-    except Exception:
-        pass
-    try:
-        bpy.utils.unregister_class(NEXUS_MT_add_root)
     except Exception:
         pass
     for c in reversed(_submenu_classes):

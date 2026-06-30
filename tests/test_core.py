@@ -18,6 +18,8 @@ def _load(modname, filename):
 
 
 expr = _load("expr", "expr.py")
+path_mod = _load("path", "path.py")
+msgpath = _load("msgpath", "msgpath.py")
 signal_mod = _load("signal", "signal.py")
 # engine imports ".signal" relatively; provide it under the expected name
 sys.modules["_nx_engine_signal"] = signal_mod
@@ -96,6 +98,58 @@ class TestExpr(unittest.TestCase):
             expr.evaluate("x.evil", {"x": 1})
 
 
+class TestMsgPath(unittest.TestCase):
+    def test_msg_flow_global_get_set_delete(self):
+        msg = {"payload": {"x": 1}, "topic": "t"}
+        flow = {}
+        glob = {}
+        self.assertEqual(msgpath.get("payload.x", msg), 1)
+        self.assertEqual(msgpath.get("msg['payload'].x", msg), 1)
+        msgpath.set("payload.x", 2, msg, flow, glob)
+        msgpath.set("flow.count", 3, msg, flow, glob)
+        msgpath.set("global.seed", 4, msg, flow, glob)
+        self.assertEqual(msg["payload"]["x"], 2)
+        self.assertEqual(flow["count"], 3)
+        self.assertEqual(glob["seed"], 4)
+        msgpath.delete("payload.x", msg, flow, glob)
+        self.assertNotIn("x", msg["payload"])
+
+
+class TestPath(unittest.TestCase):
+    def setUp(self):
+        import types
+        cube = types.SimpleNamespace(location=[1.0, 2.0, 3.0], name="Cube")
+        bpy = types.SimpleNamespace(data=types.SimpleNamespace(objects={"Cube": cube}))
+        sys.modules["bpy"] = bpy
+        self.cube = cube
+
+    def test_resolve_and_set_full_data_path(self):
+        self.assertEqual(path_mod.get_path('bpy.data.objects["Cube"].location[0]'), 1.0)
+        path_mod.set_path('bpy.data.objects["Cube"].location[0]', 9.0)
+        self.assertEqual(self.cube.location[0], 9.0)
+        path_mod.set_path('bpy.data.objects["Cube"].name', "Box")
+        self.assertEqual(self.cube.name, "Box")
+
+    def test_rejects_unsafe_path(self):
+        with self.assertRaises(path_mod.PathError):
+            path_mod.validate_path('__import__("os").system("echo bad")')
+        with self.assertRaises(path_mod.PathError):
+            path_mod.validate_path('bpy.data.__class__')
+
+
+class TestSignal(unittest.TestCase):
+    def test_node_red_msg_payload_topic(self):
+        sig = Signal(payload={"payload": 1, "topic": "a"})
+        self.assertEqual(sig.msg_payload, 1)
+        self.assertEqual(sig.topic, "a")
+        sig.msg_payload = 2
+        sig.topic = "b"
+        child = sig.child(extra=True)
+        self.assertEqual(child.msg, {"payload": 2, "topic": "b", "extra": True})
+        child.msg["payload"] = 3
+        self.assertEqual(sig.msg["payload"], 2)
+
+
 class TestEngine(unittest.TestCase):
     def test_linear_propagation(self):
         g = FakeGraph()
@@ -122,10 +176,12 @@ class TestEngine(unittest.TestCase):
         g = FakeGraph()
 
         def producer(sig, eng):
-            return [("out", sig.child(value=10))]
+            sig.set("value", 10)
+            return [("out", sig)]
 
         def doubler(sig, eng):
-            return [("out", sig.child(value=sig.get("value") * 2))]
+            sig.set("value", sig.get("value") * 2)
+            return [("out", sig)]
 
         seen = {}
 
@@ -137,6 +193,27 @@ class TestEngine(unittest.TestCase):
         g.link("P", "out", "D"); g.link("D", "out", "S")
         ExecutionEngine(g).fire("P")
         self.assertEqual(seen["value"], 20)
+
+    def test_same_attribute_overwrites_in_flow_order(self):
+        g = FakeGraph()
+        seen = {}
+
+        def first(sig, eng):
+            sig.set("x", 1)
+            return [("out", sig)]
+
+        def second(sig, eng):
+            sig.set("x", sig.get("x") + 1)
+            return [("out", sig)]
+
+        def sink(sig, eng):
+            seen["x"] = sig.get("x")
+            return []
+
+        g.add(FakeNode("A", first)); g.add(FakeNode("B", second)); g.add(FakeNode("C", sink))
+        g.link("A", "out", "B"); g.link("B", "out", "C")
+        ExecutionEngine(g).fire("A")
+        self.assertEqual(seen["x"], 2)
 
     def test_error_isolation(self):
         g = FakeGraph()
@@ -175,6 +252,25 @@ class TestEngine(unittest.TestCase):
         # visited-edge set stops re-traversal of identical edge for same signal,
         # hops cap is the absolute backstop. Must terminate.
         self.assertLess(count["n"], 1000)
+
+    def test_global_attribute_table(self):
+        g = FakeGraph()
+
+        def writer(sig, eng):
+            eng.set_global("seed", 42)
+            sig.set("local", eng.get_global("seed"))
+            return [("out", sig)]
+
+        seen = {}
+        def sink(sig, eng):
+            seen["local"] = sig.get("local")
+            seen["global"] = eng.global_attrs["seed"]
+            return []
+
+        g.add(FakeNode("W", writer)); g.add(FakeNode("S", sink))
+        g.link("W", "out", "S")
+        ExecutionEngine(g).fire("W")
+        self.assertEqual(seen, {"local": 42, "global": 42})
 
     def test_context_provider(self):
         g = FakeGraph()

@@ -15,8 +15,8 @@ FLOW_COLOR = (0.9, 0.55, 0.1, 1.0)
 
 
 @register_socket
-class NexusFlowSocket(NodeSocket):
-    bl_idname = "NexusFlowSocket"
+class FxFlowSocket(NodeSocket):
+    bl_idname = "FxFlowSocket"
     bl_label = "Flow"
 
     def draw(self, context, layout, node, text):
@@ -27,8 +27,8 @@ class NexusFlowSocket(NodeSocket):
 
 
 @register_socket
-class NexusNumberSocket(NodeSocket):
-    bl_idname = "NexusNumberSocket"
+class FxNumberSocket(NodeSocket):
+    bl_idname = "FxNumberSocket"
     bl_label = "Number"
     default_value: FloatProperty(name="Value", default=0.0)
 
@@ -43,8 +43,8 @@ class NexusNumberSocket(NodeSocket):
 
 
 @register_socket
-class NexusIntSocket(NodeSocket):
-    bl_idname = "NexusIntSocket"
+class FxIntSocket(NodeSocket):
+    bl_idname = "FxIntSocket"
     bl_label = "Integer"
     default_value: IntProperty(name="Value", default=0)
 
@@ -59,8 +59,8 @@ class NexusIntSocket(NodeSocket):
 
 
 @register_socket
-class NexusBoolSocket(NodeSocket):
-    bl_idname = "NexusBoolSocket"
+class FxBoolSocket(NodeSocket):
+    bl_idname = "FxBoolSocket"
     bl_label = "Boolean"
     default_value: BoolProperty(name="Value", default=False)
 
@@ -75,8 +75,8 @@ class NexusBoolSocket(NodeSocket):
 
 
 @register_socket
-class NexusVectorSocket(NodeSocket):
-    bl_idname = "NexusVectorSocket"
+class FxVectorSocket(NodeSocket):
+    bl_idname = "FxVectorSocket"
     bl_label = "Vector"
     default_value: FloatVectorProperty(name="Vector", size=3, default=(0.0, 0.0, 0.0))
 
@@ -92,8 +92,8 @@ class NexusVectorSocket(NodeSocket):
 
 
 @register_socket
-class NexusStringSocket(NodeSocket):
-    bl_idname = "NexusStringSocket"
+class FxStringSocket(NodeSocket):
+    bl_idname = "FxStringSocket"
     bl_label = "String"
     default_value: StringProperty(name="Text", default="")
 
@@ -108,8 +108,8 @@ class NexusStringSocket(NodeSocket):
 
 
 @register_socket
-class NexusObjectSocket(NodeSocket):
-    bl_idname = "NexusObjectSocket"
+class FxObjectSocket(NodeSocket):
+    bl_idname = "FxObjectSocket"
     bl_label = "Object"
     default_value: PointerProperty(name="Object", type=bpy.types.Object)
 
@@ -124,9 +124,9 @@ class NexusObjectSocket(NodeSocket):
 
 
 @register_socket
-class NexusDataSocket(NodeSocket):
+class FxDataSocket(NodeSocket):
     """Generic data carrier (dict/list/any). Drawn as label only."""
-    bl_idname = "NexusDataSocket"
+    bl_idname = "FxDataSocket"
     bl_label = "Data"
 
     def draw(self, context, layout, node, text):

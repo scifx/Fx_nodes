@@ -1,86 +1,163 @@
-# NEXUS Nodes — Blender 的事件驱动脚本/表达式节点系统
+# Fx Nodes — 把 Node-RED 复刻进 Blender
 
-> 触发器 → 逻辑/表达式 → 动作。内置数据预览、安全表达式沙箱、可插拔 AI 接口，
-> 为"下一代 Blender 节点插件"而设计。Blender 4.3+。
+> Fx Nodes 的核心范式现在完全对齐 Node-RED：
+> **控制线传递一个 `msg` 对象；主要负载是 `msg.payload` 和 `msg.topic`；也可以随意添加其它字段。**
 
-![pipeline](docs/preview.png)
+## 核心模型
 
-## ✨ 它能做什么
+每次触发都会创建一个 Node-RED 风格的消息对象：
 
-- **多种触发器**：定时触发、帧触发、按键触发、点击触发、场景事件、启动、手动。
-- **脚本表达式节点**：在**安全沙箱**里写 `sin(time)*amp`、`clamp(...)` 这类表达式驱动一切。
-- **逻辑节点**：分支(If)、门(Once/Throttle/EveryN)、计数器、数学、延迟(非阻塞)。
-- **动作节点（建模 + 动画）**：变换、插关键帧、生成基本体、加修改器、可见性、打印。
-- **数据预览器**：把流经的信号实时画在节点体里，外加全局 Inspector 面板。
-- **AI 节点（OpenAI 兼容）**：AI 对话、自然语言→受校验的安全表达式、自然语言→受校验的建模指令。
-- **UI 定制**：每个节点自绘节点体；N 面板含引擎控制 / 数据巡视 / AI 设置。
+```python
+msg = {
+    "payload": ...,
+    "topic": "...",
+    # any other keys
+}
+```
 
-## 🚀 安装
+节点沿控制线顺序执行，读写同一个 `msg`：
 
-1. 把 `nexus_nodes/` 打包为 zip（或用本目录里的 `nexus_nodes.zip`）。
+```text
+Inject/Timer -> Function/Expression/Change -> Get/Set Property -> Debug
+```
+
+同名字段按顺序覆盖，所以下游一定看到最新值：
+
+```text
+Expression: msg.payload = 1
+  -> Expression: msg.payload = payload + 1
+  -> Debug sees payload == 2
+```
+
+分支时 `msg` 会复制，每个分支独立演化。
+
+## Node-RED 上下文
+
+支持 Node-RED 风格上下文：
+
+```python
+context          # 当前 Function 节点自己的 context
+flow             # 当前节点图 / flow context
+G 或 global_context  # global context
+```
+
+表达式节点里可用：
+
+```python
+payload
+msg["payload"]
+topic
+flow["count"]
+G["seed"]
+global_context["seed"]
+frame
+time
+dt
+wall
+```
+
+> 注意：表达式是安全沙箱；如果需要完整 Python、import 模块、复杂逻辑，请用 Function 节点。
+
+## 主要节点
+
+- **Trigger / Inject 类**：Timer、Frame、Key、Click、Scene、Start、Manual。
+- **Function**：完整 Python 代码能力，支持 `import`，返回 `msg` / `None` / `[msg, ...]`。
+- **Expression**：安全表达式，写入一个 msg/flow/global 路径。
+- **Change**：Set / Delete / Move 任意 `msg` / `flow` / `global` 路径。
+- **Switch**：表达式条件分流 True / False。
+- **Gate / Counter / Delay**：常用控制流节点。
+- **Get Property**：读取 Blender `Copy Full Data Path` 到 msg 路径。
+- **Set Property**：把表达式结果写入 Blender full data path。
+- **Context**：显式读写 flow/global context。
+- **Debug**：Node-RED debug 节点；按路径查看 `msg`、`payload`、`flow.xxx`、`global.xxx`。
+- **AI 节点**：保留为辅助生成文本/表达式/场景指令。
+
+## Function 节点
+
+Function 节点是完整 Python：
+
+```python
+import math
+
+msg["payload"] = math.sqrt(msg.get("payload", 9))
+msg["topic"] = "sqrt"
+flow["last"] = msg["payload"]
+global_context["runs"] = global_context.get("runs", 0) + 1
+
+return msg
+```
+
+返回规则：
+
+```python
+return msg        # 继续发送
+return None       # 停止 / drop
+return [msg1, msg2]  # 从同一个输出发送多条消息
+```
+
+## Shift+V：Blender 属性路径
+
+1. 在 Blender 任意属性上右键：`Copy Full Data Path`。
+2. 切到 Fx Nodes 节点图。
+3. 按 **Shift+V**。
+4. 弹窗选择：
+   - `Get Property`
+   - `Set Property`
+5. 只创建你选择的一个节点。
+
+Add 菜单在 Fx Nodes 节点图里直接显示 `Trigger / Logic / Action / Data / AI`，不会多套一层 Fx Nodes 根菜单。
+
+## 安装
+
+1. 把 `Fx_nodes/` 打包为 zip。
 2. Blender → Edit → Preferences → Add-ons / Get Extensions → Install from Disk。
-3. 新建一个 **NEXUS Logic** 节点编辑器（编辑器类型下拉里）。
-4. 偏好设置里填 AI Base URL / Key / Model（可选；支持 OpenAI、Ollama、各类兼容服务）。
+3. 新建 **Fx Nodes** 节点编辑器。
+4. 可选：偏好设置里填 AI Base URL / Key / Model。
 
-## 🧪 上手（30 秒）
+## 示例
 
 在 Blender 文本编辑器里运行：
+
 ```python
-from nexus_nodes.examples import build_all
-build_all()   # 生成 4 个示例节点图
+from Fx_nodes.examples import build_all
+build_all()
 ```
-然后打开任一示例图，在 N 面板 **NEXUS → Engine → Start**。
-- *Pulsing Cube*：物体随时间正弦脉动。
-- *Key Spawner*：按空格生成一排方块。
-- *Frame Keyframer*：播放时间线时把程序化运动烘焙成关键帧。
-- *AI Modeling*：输入指令 → Plan → Fire，让 AI 生成几何。
 
-## 🧩 扩展（核心零改动）
+示例包含：
 
-新增一个节点只要一个被装饰的子类：
+- Timer → Expression → Set Property → Debug
+- Frame → Get Property → Debug
+- Key → Counter → Expression → Set Property → Debug
+- Manual → Function → Debug
+
+## 超简单节点 API
+
+新节点就是操作 `msg` 字典：
+
 ```python
-from nexus_nodes.core.base import NexusActionNode
-from nexus_nodes.core.registry import register_node
+from Fx_nodes.core.base import FxLogicNode
+from Fx_nodes.core.registry import register_node
 
 @register_node
-class WobbleNode(NexusActionNode):
-    bl_idname = "NexusWobble"; bl_label = "Wobble"; category = "Action"
+class AddOneNode(FxLogicNode):
+    bl_idname = "FxAddOne"
+    bl_label = "Add One"
+    category = "Logic"
+
     def init_sockets(self):
-        self.add_in_flow(); self.add_in("NexusNumberSocket", "Amount", 1.0); self.add_out_flow()
+        self.add_in_flow()
+        self.add_out_flow()
+
     def process(self, signal, engine):
-        amt = self.input_value(engine, "Amount", signal)
-        # ... 副作用 ...
-        return self.flow_out(signal, wobble=amt)
+        msg = signal.msg
+        msg["payload"] = msg.get("payload", 0) + 1
+        engine.flow_context["last_payload"] = msg["payload"]
+        return self.flow_out(signal)
 ```
-注册表会自动把它收进添加菜单、Inspector、预览体系。
 
-## 🏛️ 架构
-
-见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。要点：
-
-- **push/reactive 执行模型**（与几何节点的 pull/lazy 相反）。
-- `core/` 完全不依赖 bpy，可独立单元测试（`tests/test_core.py`）。
-- 触发器只声明 `event_source()`，真正的 bpy handler/timer/modal 由 `core/runtime.py`
-  统一注册与注销 —— **不泄漏 handler**。
-- 表达式走 AST 白名单沙箱，禁 import/dunder/未授权函数。
-- AI 用标准库 `urllib`，**零第三方依赖**；网络在工作线程，不卡 UI。
-
-## ✅ 测试
+## 测试
 
 ```bash
-python3 nexus_nodes/tests/test_core.py          # 纯核心：表达式沙箱 + 引擎 (12)
-python3 nexus_nodes/tests/test_integration.py   # mock bpy 全量导入 + 注册 (7)
+python3 Fx_nodes/tests/test_core.py
+python3 Fx_nodes/tests/test_integration.py
 ```
-
-## 🛡️ 安全
-
-- 表达式与 AI 生成的表达式都经沙箱校验后才执行。
-- AI 建模指令被限制为受白名单的结构化命令，**绝不 exec 模型原文**。
-- AI Key 存 AddonPreferences，不写进 .blend 文件。
-
-## 路线图（扩展点已就绪）
-
-- 更多动作：粒子/曲线/几何节点桥接、骨骼约束。
-- 节点组/子图、可复用宏。
-- AI 流式输出、本地模型、函数调用驱动节点图自构建。
-- 时间轴录制 → 一键烘焙为关键帧/Action。

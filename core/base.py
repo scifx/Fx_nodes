@@ -5,10 +5,10 @@ ergonomic helpers (add_in_flow / add_out / flow_out ...) so a new node is a
 ~15-line subclass — the core never changes.
 
 Subclass map:
-    NexusBaseNode      common drawing, error display, preview snapshot
-      NexusTriggerNode   has a Flow OUT, hooks an event source via eventbus
-      NexusLogicNode     pure-ish transform of the signal
-      NexusActionNode    side effects on the scene
+    FxBaseNode      common drawing, error display, preview snapshot
+      FxTriggerNode   has a Flow OUT, hooks an event source via eventbus
+      FxLogicNode     pure-ish transform of the signal
+      FxActionNode    side effects on the scene
 """
 from __future__ import annotations
 
@@ -23,14 +23,14 @@ except Exception:  # pragma: no cover - allows import in headless tests
 
 from .signal import Signal
 
-FLOW_SOCKET = "NexusFlowSocket"
+FLOW_SOCKET = "FxFlowSocket"
 
 
-class NexusBaseNode(Node):
-    """Common base for all Nexus nodes."""
+class FxBaseNode(Node):
+    """Common base for all Fx nodes."""
     # subclasses set these
     category = "Utility"
-    nexus_color = (0.3, 0.3, 0.35)
+    fx_color = (0.3, 0.3, 0.35)
 
     # runtime fields (not bpy props): set on instances
     @property
@@ -43,7 +43,7 @@ class NexusBaseNode(Node):
 
     @classmethod
     def poll(cls, ntree):
-        return getattr(ntree, "bl_idname", "") == "NexusNodeTree"
+        return getattr(ntree, "bl_idname", "") == "FxNodeTree"
 
     # ---- socket helpers --------------------------------------------------
     def add_in_flow(self, name="▶"):
@@ -65,10 +65,83 @@ class NexusBaseNode(Node):
         return self.outputs.new(idname, name)
 
     # ---- helpers for process() ------------------------------------------
-    def flow_out(self, signal: Signal, socket="▶", **payload):
-        """Standard 'continue down the flow' return."""
-        sig = signal.child(**payload) if payload else signal
-        return [(socket, sig)]
+    def flow_out(self, signal: Signal, socket="▶", **msg_updates):
+        """Continue down the control wire with the same Node-RED msg.
+
+        ``msg_updates`` are convenience updates applied to ``signal.msg`` before
+        forwarding.  Most custom nodes are simply dictionary operations on
+        ``signal.msg`` and then ``return self.flow_out(signal)``.
+        """
+        if msg_updates:
+            signal.msg.update(msg_updates)
+        return [(socket, signal)]
+
+    # ---- ultra-simple Node-RED msg/context API ---------------------------
+    def msg(self, signal: Signal):
+        return signal.msg
+
+    def payload(self, signal: Signal, default=None):
+        return signal.msg.get("payload", default)
+
+    def set_payload(self, signal: Signal, value):
+        signal.msg["payload"] = value
+        return value
+
+    def topic(self, signal: Signal, default=None):
+        return signal.msg.get("topic", default)
+
+    def set_topic(self, signal: Signal, value):
+        signal.msg["topic"] = value
+        return value
+
+    # Compatibility helpers from the attribute-table iteration.
+    def attrs(self, signal: Signal):
+        return signal.msg
+
+    def attr(self, signal: Signal, key, default=None):
+        return signal.msg.get(key, default)
+
+    def set_attr(self, signal: Signal, key, value):
+        signal.msg[key] = value
+        return value
+
+    def del_attr(self, signal: Signal, key):
+        signal.msg.pop(key, None)
+
+    def node_context(self, engine):
+        return engine.node_context(self.node_uid) if hasattr(engine, "node_context") else {}
+
+    def flow_context(self, engine):
+        return getattr(engine, "flow_context", {})
+
+    def global_context(self, engine):
+        return getattr(engine, "global_context", getattr(engine, "global_attrs", {}))
+
+    def globals(self, engine):
+        return self.global_context(engine)
+
+    def expr_vars(self, signal: Signal, engine):
+        """Variables visible to expressions.
+
+        Node-RED conventions are first-class: ``msg``, ``payload``, ``topic``,
+        ``flow`` and ``global``.  For convenience, top-level msg keys are also
+        exposed as variables, so ``payload + 1`` works.
+        """
+        msg = signal.msg
+        flow = self.flow_context(engine)
+        glob = self.global_context(engine)
+        v = dict(signal.context)
+        v.update(msg)  # top-level msg keys have highest convenience precedence
+        v["msg"] = msg
+        v["payload"] = msg.get("payload")
+        v["topic"] = msg.get("topic")
+        v["flow"] = flow
+        v["global"] = glob
+        v["global_context"] = glob
+        # Backwards-compatible names.
+        v["attrs"] = msg
+        v["G"] = glob
+        return v
 
     def input_value(self, engine, socket_name, signal):
         """Read a value socket: from incoming link (evaluated) or its default."""
@@ -100,7 +173,7 @@ class NexusBaseNode(Node):
         self._error = ""
         try:
             self.use_custom_color = True
-            self.color = self.nexus_color
+            self.color = self.fx_color
         except Exception:
             pass
         self.init_sockets()
@@ -126,9 +199,9 @@ class NexusBaseNode(Node):
         pass
 
 
-class NexusTriggerNode(NexusBaseNode):
+class FxTriggerNode(FxBaseNode):
     category = "Trigger"
-    nexus_color = (0.35, 0.18, 0.18)
+    fx_color = (0.35, 0.18, 0.18)
 
     def init_sockets(self):
         self.add_out_flow()
@@ -138,11 +211,11 @@ class NexusTriggerNode(NexusBaseNode):
         return self.flow_out(signal)
 
 
-class NexusLogicNode(NexusBaseNode):
+class FxLogicNode(FxBaseNode):
     category = "Logic"
-    nexus_color = (0.18, 0.28, 0.35)
+    fx_color = (0.18, 0.28, 0.35)
 
 
-class NexusActionNode(NexusBaseNode):
+class FxActionNode(FxBaseNode):
     category = "Action"
-    nexus_color = (0.18, 0.32, 0.2)
+    fx_color = (0.18, 0.32, 0.2)

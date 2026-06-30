@@ -1,25 +1,26 @@
-"""N-panel UI in the NEXUS node editor: engine control + inspector + AI."""
+"""N-panel UI in the Fx Nodes node editor: engine control + inspector + AI."""
 from __future__ import annotations
 
 import bpy
 from bpy.types import Panel
 
 from ..core.runtime import RUNTIME
+from ..prefs import get_preferences
 
 
-class NexusPanelBase:
+class FxPanelBase:
     bl_space_type = 'NODE_EDITOR'
     bl_region_type = 'UI'
-    bl_category = "NEXUS"
+    bl_category = "Fx Nodes"
 
     @classmethod
     def poll(cls, context):
-        return getattr(context.space_data, "tree_type", "") == "NexusNodeTree"
+        return getattr(context.space_data, "tree_type", "") == "FxNodeTree"
 
 
-class NEXUS_PT_engine(NexusPanelBase, Panel):
+class FXNODES_PT_engine(FxPanelBase, Panel):
     bl_label = "Engine"
-    bl_idname = "NEXUS_PT_engine"
+    bl_idname = "FXNODES_PT_engine"
 
     def draw(self, context):
         layout = self.layout
@@ -27,11 +28,13 @@ class NEXUS_PT_engine(NexusPanelBase, Panel):
         row = layout.row(align=True)
         row.scale_y = 1.4
         if running:
-            row.operator("nexus.stop_engine", text="Stop", icon="PAUSE", depress=True)
+            row.operator("fx_nodes.stop_engine", text="Stop", icon="PAUSE", depress=True)
         else:
-            row.operator("nexus.start_engine", text="Start", icon="PLAY")
+            row.operator("fx_nodes.start_engine", text="Start", icon="PLAY")
         layout.label(text="Status: " + ("RUNNING" if running else "stopped"),
                      icon="REC" if running else "RADIOBUT_OFF")
+        layout.separator()
+        layout.operator("fx_nodes.paste_property_menu", text="Paste Property Node (Shift+V)", icon="RNA")
 
         tree = context.space_data.edit_tree
         if tree and tree.name in RUNTIME.engines:
@@ -45,18 +48,18 @@ class NEXUS_PT_engine(NexusPanelBase, Panel):
                 box.label(text=f"Errors: {s['errors']}", icon="ERROR")
 
 
-class NEXUS_PT_inspector(NexusPanelBase, Panel):
+class FXNODES_PT_inspector(FxPanelBase, Panel):
     bl_label = "Data Inspector"
-    bl_idname = "NEXUS_PT_inspector"
+    bl_idname = "FXNODES_PT_inspector"
 
     def draw(self, context):
         layout = self.layout
         tree = context.space_data.edit_tree
         if not tree:
             return
-        previews = [n for n in tree.nodes if n.bl_idname == "NexusDataPreview"]
+        previews = [n for n in tree.nodes if n.bl_idname == "FxDebug"]
         if not previews:
-            layout.label(text="Add a Data Preview node", icon="INFO")
+            layout.label(text="Add a Debug node", icon="INFO")
             return
         for n in previews:
             box = layout.box()
@@ -73,17 +76,17 @@ class NEXUS_PT_inspector(NexusPanelBase, Panel):
                 row.label(text=str(v)[:24])
 
 
-class NEXUS_PT_ai(NexusPanelBase, Panel):
+class FXNODES_PT_ai(FxPanelBase, Panel):
     bl_label = "AI"
-    bl_idname = "NEXUS_PT_ai"
+    bl_idname = "FXNODES_PT_ai"
 
     def draw(self, context):
         layout = self.layout
-        prefs = context.preferences.addons["nexus_nodes"].preferences
+        prefs = get_preferences(context)
         layout.label(text=f"Model: {prefs.ai_model}")
         layout.label(text=f"Endpoint: {prefs.ai_base_url[:28]}")
-        layout.operator("nexus.test_ai", icon="PLUGIN")
+        layout.operator("fx_nodes.test_ai", icon="PLUGIN")
         layout.prop(prefs, "allow_ai")
 
 
-CLASSES = [NEXUS_PT_engine, NEXUS_PT_inspector, NEXUS_PT_ai]
+CLASSES = [FXNODES_PT_engine, FXNODES_PT_inspector, FXNODES_PT_ai]

@@ -9,14 +9,14 @@ from __future__ import annotations
 import bpy
 from bpy.props import FloatProperty, IntProperty, EnumProperty, StringProperty, BoolProperty
 
-from ...core.base import NexusTriggerNode
+from ...core.base import FxTriggerNode
 from ...core.registry import register_node
 
 
 @register_node
-class TimerTriggerNode(NexusTriggerNode):
+class TimerTriggerNode(FxTriggerNode):
     """定时触发：每 interval 秒点火一次。"""
-    bl_idname = "NexusTimerTrigger"
+    bl_idname = "FxTimerTrigger"
     bl_label = "Timer Trigger"
     bl_icon = "TIME"
 
@@ -32,9 +32,9 @@ class TimerTriggerNode(NexusTriggerNode):
 
 
 @register_node
-class FrameTriggerNode(NexusTriggerNode):
+class FrameTriggerNode(FxTriggerNode):
     """帧触发：随时间线帧变化点火（可设步长/范围）。"""
-    bl_idname = "NexusFrameTrigger"
+    bl_idname = "FxFrameTrigger"
     bl_label = "Frame Trigger"
     bl_icon = "KEYFRAME"
 
@@ -50,9 +50,9 @@ class FrameTriggerNode(NexusTriggerNode):
 
 
 @register_node
-class KeyTriggerNode(NexusTriggerNode):
+class KeyTriggerNode(FxTriggerNode):
     """按键触发：监听键盘按键。"""
-    bl_idname = "NexusKeyTrigger"
+    bl_idname = "FxKeyTrigger"
     bl_label = "Key Trigger"
     bl_icon = "EVENT_A"
 
@@ -84,9 +84,9 @@ class KeyTriggerNode(NexusTriggerNode):
 
 
 @register_node
-class ClickTriggerNode(NexusTriggerNode):
+class ClickTriggerNode(FxTriggerNode):
     """点击触发：监听视口鼠标点击（可选只在点中物体时）。"""
-    bl_idname = "NexusClickTrigger"
+    bl_idname = "FxClickTrigger"
     bl_label = "Click Trigger"
     bl_icon = "RESTRICT_SELECT_OFF"
 
@@ -94,7 +94,7 @@ class ClickTriggerNode(NexusTriggerNode):
                          items=[("LEFTMOUSE", "Left", ""), ("RIGHTMOUSE", "Right", ""), ("MIDDLEMOUSE", "Middle", "")],
                          default="LEFTMOUSE")
     require_hit: BoolProperty(name="Only On Object Hit", default=False,
-                              description="仅当射线击中物体时点火，命中物体写入 payload['object']")
+                              description="仅当射线击中物体时点火，命中物体写入 msg['object']")
 
     def draw_body(self, context, layout):
         layout.prop(self, "button")
@@ -105,9 +105,9 @@ class ClickTriggerNode(NexusTriggerNode):
 
 
 @register_node
-class SceneEventTriggerNode(NexusTriggerNode):
+class SceneEventTriggerNode(FxTriggerNode):
     """场景事件触发：depsgraph 更新 / 文件加载 / 渲染前后 / 物体选择。"""
-    bl_idname = "NexusSceneEventTrigger"
+    bl_idname = "FxSceneEventTrigger"
     bl_label = "Scene Event Trigger"
     bl_icon = "SCENE_DATA"
 
@@ -131,9 +131,9 @@ class SceneEventTriggerNode(NexusTriggerNode):
 
 
 @register_node
-class StartTriggerNode(NexusTriggerNode):
+class StartTriggerNode(FxTriggerNode):
     """启动触发：引擎启动时点火一次（用于初始化）。"""
-    bl_idname = "NexusStartTrigger"
+    bl_idname = "FxStartTrigger"
     bl_label = "On Start"
     bl_icon = "PLAY"
 
@@ -142,14 +142,14 @@ class StartTriggerNode(NexusTriggerNode):
 
 
 @register_node
-class ManualTriggerNode(NexusTriggerNode):
+class ManualTriggerNode(FxTriggerNode):
     """手动触发：在节点上点按钮即可点火，调试神器。"""
-    bl_idname = "NexusManualTrigger"
+    bl_idname = "FxManualTrigger"
     bl_label = "Manual Trigger"
     bl_icon = "HAND"
 
     def draw_body(self, context, layout):
-        op = layout.operator("nexus.fire_node", text="Fire ▶", icon="PLAY")
+        op = layout.operator("fx_nodes.fire_node", text="Fire ▶", icon="PLAY")
         op.node_name = self.name
         op.tree_name = self.id_data.name
 

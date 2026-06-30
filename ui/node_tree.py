@@ -7,18 +7,18 @@ from bpy.types import NodeTree
 from ..core.engine import GraphAdapter
 
 
-class NexusNodeTree(NodeTree):
-    bl_idname = "NexusNodeTree"
-    bl_label = "NEXUS Logic"
+class FxNodeTree(NodeTree):
+    bl_idname = "FxNodeTree"
+    bl_label = "Fx Nodes"
     bl_icon = "NODETREE"
 
 
 class BpyGraphAdapter(GraphAdapter):
-    """Bridges the engine to a live NexusNodeTree.
+    """Bridges the engine to a live FxNodeTree.
 
     uid format: "<node.name>" within a single tree (the adapter is per-tree).
     """
-    def __init__(self, tree: NexusNodeTree):
+    def __init__(self, tree: FxNodeTree):
         self.tree = tree
         self._uid_to_node = {}
         self.reindex()

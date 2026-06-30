@@ -25,7 +25,7 @@ from .engine import ExecutionEngine
 from .signal import Signal
 
 
-class NexusRuntime:
+class FxRuntime:
     """One runtime per Blender session; manages all active trees' engines."""
     def __init__(self):
         self.engines: Dict[str, ExecutionEngine] = {}      # tree name -> engine
@@ -87,16 +87,16 @@ class NexusRuntime:
     # ---- trigger discovery -------------------------------------------------
     def _iter_trigger_nodes(self):
         for tree in bpy.data.node_groups:
-            if getattr(tree, "bl_idname", "") != "NexusNodeTree":
+            if getattr(tree, "bl_idname", "") != "FxNodeTree":
                 continue
             for node in tree.nodes:
                 if hasattr(node, "event_source"):
                     yield tree, node
 
-    def fire_node(self, tree, node, extra_context=None, payload=None):
+    def fire_node(self, tree, node, extra_context=None, msg=None):
         eng = self.get_engine(tree)
         self.adapters[tree.name].reindex()
-        sig = Signal(payload=dict(payload or {}), source=node.node_uid)
+        sig = Signal(payload=dict(msg or {}), source=node.node_uid)
         eng.fire(node.node_uid, sig, extra_context=extra_context)
 
     # ---- start / stop ------------------------------------------------------
@@ -129,6 +129,7 @@ class NexusRuntime:
                 pass
         self._timer_fns.clear()
         self._delayed.clear()
+        self._modal_running = False
 
     # ---- handler installers ------------------------------------------------
     def _install_frame_handler(self):
@@ -235,7 +236,7 @@ class NexusRuntime:
                         for _, node in self._iter_trigger_nodes())
         if has_input and not self._modal_running:
             try:
-                bpy.ops.nexus.input_listener('INVOKE_DEFAULT')
+                bpy.ops.fx_nodes.input_listener('INVOKE_DEFAULT')
             except Exception:
                 pass
 
@@ -251,16 +252,16 @@ class NexusRuntime:
                 if (event.type == src.get("key") and event.value == src.get("value")
                         and event.ctrl == src.get("ctrl") and event.shift == src.get("shift")
                         and event.alt == src.get("alt")):
-                    self.fire_node(tree, node, payload={"key": event.type})
+                    self.fire_node(tree, node, msg={"key": event.type})
             elif kind == "click":
                 if event.type == src.get("button") and event.value == "PRESS":
-                    payload = {"mouse_x": event.mouse_x, "mouse_y": event.mouse_y}
+                    msg = {"mouse_x": event.mouse_x, "mouse_y": event.mouse_y}
                     if src.get("require_hit"):
                         obj = self._raycast(event)
                         if obj is None:
                             continue
-                        payload["object"] = obj
-                    self.fire_node(tree, node, payload=payload)
+                        msg["object"] = obj
+                    self.fire_node(tree, node, msg=msg)
 
     def _raycast(self, event):  # best-effort viewport pick
         try:
@@ -280,4 +281,4 @@ class NexusRuntime:
 
 
 # module-level singleton
-RUNTIME = NexusRuntime()
+RUNTIME = FxRuntime()

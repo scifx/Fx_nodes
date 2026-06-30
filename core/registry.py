@@ -26,9 +26,16 @@ def register_node(cls: Type) -> Type:
     idname = getattr(cls, "bl_idname", None)
     if not idname:
         raise ValueError(f"{cls.__name__} 缺少 bl_idname")
+    # During Blender script reloads modules may be imported more than once.
+    # Keep the registry idempotent so add menus don't accumulate duplicates.
+    old = NODE_CLASSES.get(idname)
     NODE_CLASSES[idname] = cls
     cat = getattr(cls, "category", "Utility")
-    CATEGORIES.setdefault(cat, []).append(idname)
+    items = CATEGORIES.setdefault(cat, [])
+    if old is None and idname not in items:
+        items.append(idname)
+    elif idname not in items:
+        items.append(idname)
     return cls
 
 

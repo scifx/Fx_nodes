@@ -3,11 +3,38 @@ from __future__ import annotations
 
 import bpy
 from bpy.types import AddonPreferences
-from bpy.props import StringProperty, BoolProperty, FloatProperty
+from bpy.props import StringProperty, BoolProperty
+
+# In legacy add-on installs this is usually "Fx_nodes".  In Blender 4.x
+# extension installs it can be a fully-qualified package name such as
+# "bl_ext.user_default.fx_nodes".  Using __package__ keeps preferences bound to
+# the actual add-on module instead of a hard-coded legacy id.
+ADDON_ID = __package__ or "Fx_nodes"
 
 
-class NexusPreferences(AddonPreferences):
-    bl_idname = "nexus_nodes"
+def get_preferences(context=None):
+    """Return this add-on's preferences, tolerant of legacy/extension ids."""
+    context = context or bpy.context
+    addons = getattr(getattr(context, "preferences", None), "addons", {})
+    candidates = [ADDON_ID, "Fx_nodes", "fx_nodes"]
+    for key in candidates:
+        try:
+            return addons[key].preferences
+        except Exception:
+            pass
+    # last resort: find by preference RNA/class name, useful during development reloads
+    try:
+        for addon in addons.values():
+            prefs = getattr(addon, "preferences", None)
+            if prefs and prefs.__class__.__name__ == "FxPreferences":
+                return prefs
+    except Exception:
+        pass
+    raise KeyError("Fx_nodes add-on preferences not found")
+
+
+class FxPreferences(AddonPreferences):
+    bl_idname = ADDON_ID
 
     ai_base_url: StringProperty(
         name="AI Base URL",
@@ -28,7 +55,7 @@ class NexusPreferences(AddonPreferences):
         box.prop(self, "ai_api_key")
         box.prop(self, "ai_model")
         row = box.row()
-        row.operator("nexus.test_ai", icon="PLUGIN")
+        row.operator("fx_nodes.test_ai", icon="PLUGIN")
         box2 = layout.box()
         box2.label(text="Safety", icon="LOCKED")
         box2.prop(self, "allow_ai")

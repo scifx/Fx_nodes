@@ -46,6 +46,14 @@ class ExecutionEngine:
         self.running = False
         self._memo: Dict[Tuple[str, int], Any] = {}     # (node_uid, tick) -> cached output
         self.stats = EngineStats()
+        # Node-RED-style context stores.  ``flow_context`` belongs to this node
+        # tree/engine; ``global_context`` is the wider shared store for the
+        # engine.  ``global_attrs`` remains as an alias from the previous
+        # attribute-table iteration.
+        self.flow_context: Dict[str, Any] = {}
+        self.global_context: Dict[str, Any] = {}
+        self.global_attrs = self.global_context
+        self.node_contexts: Dict[str, Dict[str, Any]] = {}
         self._on_event: List[Callable[[str, dict], None]] = []  # observers (UI)
 
     # -- observability ------------------------------------------------------
@@ -138,6 +146,23 @@ class ExecutionEngine:
     def memo_set(self, node_uid: str, value: Any) -> Any:
         self._memo[(node_uid, self.tick)] = value
         return value
+
+    # -- Node-RED-style context stores -------------------------------------
+    def node_context(self, node_uid: str) -> Dict[str, Any]:
+        return self.node_contexts.setdefault(node_uid, {})
+
+    def get_global(self, key: str, default: Any = None) -> Any:
+        return self.global_context.get(key, default)
+
+    def set_global(self, key: str, value: Any) -> Any:
+        self.global_context[key] = value
+        return value
+
+    def del_global(self, key: str) -> None:
+        self.global_context.pop(key, None)
+
+    def clear_globals(self) -> None:
+        self.global_context.clear()
 
 
 class _Miss:

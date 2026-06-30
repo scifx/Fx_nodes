@@ -1,83 +1,138 @@
-"""Logic nodes: expressions, branching, gates, math, counters, delay."""
+"""Node-RED-style logic nodes: Function, Expression, Switch, Delay, Counter."""
 from __future__ import annotations
 
-import bpy
-from bpy.props import StringProperty, FloatProperty, IntProperty, EnumProperty, BoolProperty
+import textwrap
+from bpy.props import StringProperty, FloatProperty, IntProperty, EnumProperty
 
-from ...core.base import NexusLogicNode
+from ...core.base import FxLogicNode
 from ...core.registry import register_node
+from ...core.signal import Signal
 from ...core import expr
 
 
 @register_node
-class ExpressionNode(NexusLogicNode):
-    """脚本表达式节点 —— 系统的灵魂。
+class FunctionNode(FxLogicNode):
+    """Full Python Function node, Node-RED style.
 
-    在沙箱里求值一个表达式。可用变量：上游 payload 的所有键 + frame/time/dt。
-    结果写入 payload[out_key] 并继续向下流。表达式输出也可被 pull-读取。
+    The code runs inside a generated Python function and may import modules.
+    Available names: msg, context, flow, global_context, node, engine, bpy.
+
+    Return semantics:
+      * return msg/dict  -> send downstream
+      * return None      -> stop/drop
+      * return [msg,...] -> send multiple messages through the same output
     """
-    bl_idname = "NexusExpression"
-    bl_label = "Expression"
+    bl_idname = "FxFunction"
+    bl_label = "Function"
     bl_icon = "SCRIPT"
 
-    expression: StringProperty(name="Expr", default="sin(time) * 2",
-                               description="安全沙箱表达式，例如 sin(time)*amp")
-    out_key: StringProperty(name="Store As", default="result")
-    live_value: StringProperty(name="Last", default="")
+    code: StringProperty(
+        name="Python Code",
+        default="# msg is a dict. You may import modules.\nmsg['payload'] = msg.get('payload')\nreturn msg",
+        description="Full Python code. Use return msg to continue; return None to stop.",
+    )
+    last_result: StringProperty(name="Last", default="")
 
     def init_sockets(self):
-        self.add_in_flow()
-        self.add_in("NexusNumberSocket", "amp", 1.0)
-        self.add_out_flow()
-        self.add_out("NexusDataSocket", "result")
+        self.add_in_flow(); self.add_out_flow()
 
     def draw_body(self, context, layout):
-        layout.prop(self, "expression", text="")
-        layout.prop(self, "out_key")
-        if self.live_value:
-            layout.label(text=f"= {self.live_value}", icon="CHECKMARK")
+        layout.prop(self, "code", text="")
+        if self.last_result:
+            layout.label(text=self.last_result[:60], icon="CHECKMARK")
 
-    def _vars(self, signal, engine):
-        v = dict(signal.payload)
-        v.update(signal.context)
-        # expose connected value sockets by socket name
-        for s in self.inputs:
-            if s.bl_idname != "NexusFlowSocket":
-                try:
-                    v[s.name] = self.input_value(engine, s.name, signal)
-                except Exception:
-                    pass
-        return v
-
-    def _eval(self, signal, engine):
-        return expr.evaluate(self.expression, self._vars(signal, engine))
+    def _call_user_code(self, signal, engine):
+        body = textwrap.indent(self.code or "return msg", "    ")
+        src = "def _fx_user_function(msg, context, flow, global_context, node, engine):\n" + body
+        ns = {}
+        try:
+            import bpy  # type: ignore
+            ns["bpy"] = bpy
+        except Exception:
+            pass
+        exec(src, ns, ns)  # noqa: S102 - intentionally full Python Function node
+        return ns["_fx_user_function"](
+            signal.msg,
+            self.node_context(engine),
+            self.flow_context(engine),
+            self.global_context(engine),
+            self,
+            engine,
+        )
 
     def process(self, signal, engine):
         try:
-            val = self._eval(signal, engine)
-            self.live_value = str(val)[:24]
-            self._error = ""
-        except expr.ExprError as e:
-            self._error = str(e)
+            result = self._call_user_code(signal, engine)
+        except Exception as e:
+            self._error = f"{type(e).__name__}: {e}"
             return []
-        return self.flow_out(signal, **{self.out_key: val})
-
-    def compute(self, socket_name, signal, engine):
-        try:
-            return self._eval(signal, engine)
-        except expr.ExprError as e:
-            self._error = str(e)
-            return None
+        self._error = ""
+        if result is None:
+            self.last_result = "dropped"
+            return []
+        if isinstance(result, list):
+            out = []
+            for item in result:
+                if item is None:
+                    continue
+                if not isinstance(item, dict):
+                    raise TypeError("Function list items must be msg dict or None")
+                out.append(("▶", Signal(payload=item, context=signal.context, source=signal.source,
+                                         ts=signal.ts, hops=signal.hops)))
+            self.last_result = f"sent {len(out)} msg(s)"
+            return out
+        if not isinstance(result, dict):
+            raise TypeError("Function must return msg dict, list of msg dicts, or None")
+        signal.payload = result
+        self.last_result = "sent msg"
+        return self.flow_out(signal)
 
 
 @register_node
-class BranchNode(NexusLogicNode):
-    """分支：表达式为真走 True 口，否则走 False 口。"""
-    bl_idname = "NexusBranch"
-    bl_label = "Branch (If)"
+class ExpressionNode(FxLogicNode):
+    """Evaluate a sandboxed expression and store it into a msg path."""
+    bl_idname = "FxExpression"
+    bl_label = "Expression"
+    bl_icon = "DRIVER"
+
+    expression: StringProperty(
+        name="Expr",
+        default="payload",
+        description="安全表达式；可用 msg/payload/topic/flow/G/global_context/frame/time",
+    )
+    out_path: StringProperty(name="Store To", default="payload")
+    live_value: StringProperty(name="Last", default="")
+
+    def init_sockets(self):
+        self.add_in_flow(); self.add_out_flow()
+
+    def draw_body(self, context, layout):
+        layout.prop(self, "expression", text="")
+        layout.prop(self, "out_path")
+        if self.live_value:
+            layout.label(text=f"{self.out_path} = {self.live_value}", icon="CHECKMARK")
+
+    def process(self, signal, engine):
+        from ...core import msgpath
+        try:
+            val = expr.evaluate(self.expression, self.expr_vars(signal, engine))
+            msgpath.set(self.out_path, val, signal.msg, self.flow_context(engine), self.global_context(engine))
+        except (expr.ExprError, msgpath.MsgPathError) as e:
+            self._error = str(e)
+            return []
+        self.live_value = repr(val)[:32]
+        self._error = ""
+        return self.flow_out(signal)
+
+
+@register_node
+class SwitchNode(FxLogicNode):
+    """Node-RED-like Switch node with a Python expression condition."""
+    bl_idname = "FxSwitch"
+    bl_label = "Switch"
     bl_icon = "TRIA_RIGHT"
 
-    condition: StringProperty(name="If", default="result > 0")
+    condition: StringProperty(name="If", default="bool(payload)")
 
     def init_sockets(self):
         self.add_in_flow()
@@ -88,20 +143,19 @@ class BranchNode(NexusLogicNode):
         layout.prop(self, "condition", text="if")
 
     def process(self, signal, engine):
-        v = dict(signal.payload); v.update(signal.context)
         try:
-            ok = bool(expr.evaluate(self.condition, v))
-            self._error = ""
+            ok = bool(expr.evaluate(self.condition, self.expr_vars(signal, engine)))
         except expr.ExprError as e:
             self._error = str(e)
             return []
-        return [("True" if ok else "False", signal.child())]
+        self._error = ""
+        return [("True" if ok else "False", signal)]
 
 
 @register_node
-class GateNode(NexusLogicNode):
-    """门：throttle/debounce/once，控制信号通过的节奏。"""
-    bl_idname = "NexusGate"
+class GateNode(FxLogicNode):
+    """Once / throttle / every-N control gate."""
+    bl_idname = "FxGate"
     bl_label = "Gate"
     bl_icon = "FILTER"
 
@@ -124,13 +178,14 @@ class GateNode(NexusLogicNode):
             layout.prop(self, "n")
 
     def process(self, signal, engine):
-        st = engine.__dict__.setdefault("_gate_state", {}).setdefault(self.node_uid, {"last": -1e9, "count": 0, "fired": False})
+        st = engine.__dict__.setdefault("_gate_state", {}).setdefault(
+            self.node_uid, {"last": -1e18, "count": 0, "fired": False})
         if self.mode == "ONCE":
             if st["fired"]:
                 return []
             st["fired"] = True
         elif self.mode == "THROTTLE":
-            now = signal.context.get("time", signal.ts)
+            now = signal.context.get("wall", signal.context.get("time", signal.ts))
             if now - st["last"] < self.seconds:
                 return []
             st["last"] = now
@@ -142,81 +197,43 @@ class GateNode(NexusLogicNode):
 
 
 @register_node
-class CounterNode(NexusLogicNode):
-    """计数器：每次点火 +step，写入 payload[key]。"""
-    bl_idname = "NexusCounter"
+class CounterNode(FxLogicNode):
+    """Stateful counter that writes to a msg path."""
+    bl_idname = "FxCounter"
     bl_label = "Counter"
     bl_icon = "LINENUMBERS_ON"
 
+    path: StringProperty(name="Store To", default="payload")
     step: FloatProperty(name="Step", default=1.0)
-    key: StringProperty(name="Key", default="count")
     reset_at: FloatProperty(name="Wrap At (0=off)", default=0.0)
 
     def init_sockets(self):
         self.add_in_flow(); self.add_out_flow()
-        self.add_out("NexusNumberSocket", "count")
 
     def draw_body(self, context, layout):
-        layout.prop(self, "key"); layout.prop(self, "step"); layout.prop(self, "reset_at")
+        layout.prop(self, "path"); layout.prop(self, "step"); layout.prop(self, "reset_at")
 
     def _state(self, engine):
         return engine.__dict__.setdefault("_counter_state", {})
 
     def process(self, signal, engine):
-        s = self._state(engine)
-        val = s.get(self.node_uid, 0.0) + self.step
+        from ...core import msgpath
+        state = self._state(engine)
+        val = state.get(self.node_uid, 0.0) + self.step
         if self.reset_at and val >= self.reset_at:
             val = 0.0
-        s[self.node_uid] = val
-        return self.flow_out(signal, **{self.key: val})
-
-    def compute(self, socket_name, signal, engine):
-        return self._state(engine).get(self.node_uid, 0.0)
-
-
-@register_node
-class MathNode(NexusLogicNode):
-    """数学：对两个数做运算，结果入 payload。"""
-    bl_idname = "NexusMath"
-    bl_label = "Math"
-    bl_icon = "PLUS"
-
-    op: EnumProperty(name="Op", items=[
-        ("ADD", "Add", ""), ("SUB", "Subtract", ""), ("MUL", "Multiply", ""),
-        ("DIV", "Divide", ""), ("MOD", "Modulo", ""), ("POW", "Power", ""),
-        ("MIN", "Min", ""), ("MAX", "Max", ""),
-    ], default="ADD")
-    out_key: StringProperty(name="Store As", default="value")
-
-    def init_sockets(self):
-        self.add_in_flow()
-        self.add_in("NexusNumberSocket", "A", 0.0)
-        self.add_in("NexusNumberSocket", "B", 0.0)
-        self.add_out_flow()
-        self.add_out("NexusNumberSocket", "value")
-
-    def draw_body(self, context, layout):
-        layout.prop(self, "op", text=""); layout.prop(self, "out_key")
-
-    def _calc(self, signal, engine):
-        a = self.input_value(engine, "A", signal) or 0.0
-        b = self.input_value(engine, "B", signal) or 0.0
-        ops = {"ADD": a + b, "SUB": a - b, "MUL": a * b,
-               "DIV": a / b if b else 0.0, "MOD": a % b if b else 0.0,
-               "POW": a ** b, "MIN": min(a, b), "MAX": max(a, b)}
-        return ops[self.op]
-
-    def process(self, signal, engine):
-        return self.flow_out(signal, **{self.out_key: self._calc(signal, engine)})
-
-    def compute(self, socket_name, signal, engine):
-        return self._calc(signal, engine)
+        state[self.node_uid] = val
+        try:
+            msgpath.set(self.path, val, signal.msg, self.flow_context(engine), self.global_context(engine))
+        except msgpath.MsgPathError as e:
+            self._error = str(e); return []
+        return self.flow_out(signal)
 
 
 @register_node
-class DelayNode(NexusLogicNode):
-    """延迟：N 秒后再继续向下游（用 timer 实现，不阻塞 UI）。"""
-    bl_idname = "NexusDelay"
+class DelayNode(FxLogicNode):
+    """Continue downstream after N seconds without blocking Blender UI."""
+    bl_idname = "FxDelay"
     bl_label = "Delay"
     bl_icon = "PREVIEW_RANGE"
 
@@ -229,10 +246,8 @@ class DelayNode(NexusLogicNode):
         layout.prop(self, "seconds")
 
     def process(self, signal, engine):
-        # schedule a deferred continuation; runtime provides engine.schedule
         sched = getattr(engine, "schedule", None)
-        cont = signal.child()
         if sched:
-            sched(self.seconds, self.node_uid, cont)
-            return []   # downstream is fired later by the scheduler
+            sched(self.seconds, self.node_uid, signal.child())
+            return []
         return self.flow_out(signal)

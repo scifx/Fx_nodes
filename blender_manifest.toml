@@ -1,8 +1,8 @@
 schema_version = "1.0.0"
 
-id = "nexus_nodes"
+id = "fx_nodes"
 version = "0.1.0"
-name = "NEXUS Nodes"
+name = "Fx Nodes"
 tagline = "Event-driven scripting nodes: triggers, expressions, data preview, AI"
 maintainer = "Arena.ai Agent <agent@arena.ai>"
 type = "add-on"

@@ -1,7 +1,7 @@
 """AI nodes: bring LLM intelligence into the node graph.
 
 Three flavors:
-  AIChatNode          prompt -> text (templated with payload vars)
+  AIChatNode          prompt -> text (templated with msg values)
   AIExpressionNode    natural language -> a SANDBOXED expression (validated!)
   AISceneCommandNode  natural language -> structured, validated action plan
 
@@ -14,15 +14,16 @@ import json
 import bpy
 from bpy.props import StringProperty, FloatProperty, IntProperty, EnumProperty, BoolProperty
 
-from ...core.base import NexusBaseNode
+from ...core.base import FxBaseNode
 from ...core.registry import register_node
 from ...core import expr
 from .provider import make_provider
+from ...prefs import get_preferences
 
 
 def _get_prefs():
     try:
-        return bpy.context.preferences.addons["nexus_nodes"].preferences
+        return get_preferences(bpy.context)
     except Exception:
         return None
 
@@ -37,17 +38,17 @@ def _provider_from_prefs(node):
 
 
 def _template(s: str, signal) -> str:
-    """Replace {key} in s with payload/context values."""
-    v = dict(signal.payload); v.update(signal.context)
+    """Replace {key} in s with msg/context values."""
+    v = dict(signal.msg); v.update(signal.context)
     try:
         return s.format(**v)
     except Exception:
         return s
 
 
-class _AIBase(NexusBaseNode):
+class _AIBase(FxBaseNode):
     category = "AI"
-    nexus_color = (0.32, 0.12, 0.34)
+    fx_color = (0.32, 0.12, 0.34)
 
     base_url_override: StringProperty(name="Base URL", default="")
     model_override: StringProperty(name="Model", default="")
@@ -73,8 +74,8 @@ class _AIBase(NexusBaseNode):
 
 @register_node
 class AIChatNode(_AIBase):
-    """AI 对话：prompt（可用 {payload} 模板）→ 文本，写入 payload[out_key]。"""
-    bl_idname = "NexusAIChat"
+    """AI 对话：prompt 可用 {msg_key} 模板，结果写入 msg[out_key]。"""
+    bl_idname = "FxAIChat"
     bl_label = "AI Chat"
     bl_icon = "OUTLINER_OB_LIGHT"
 
@@ -83,7 +84,7 @@ class AIChatNode(_AIBase):
     out_key: StringProperty(name="Store As", default="ai_text")
 
     def init_sockets(self):
-        self.add_in_flow(); self.add_out_flow(); self.add_out("NexusStringSocket", "text")
+        self.add_in_flow(); self.add_out_flow()
 
     def draw_body(self, context, layout):
         layout.prop(self, "prompt", text="")
@@ -120,7 +121,7 @@ class AIChatNode(_AIBase):
 @register_node
 class AIExpressionNode(_AIBase):
     """AI 表达式：用自然语言描述要的公式 → 生成并**校验**为安全沙箱表达式。"""
-    bl_idname = "NexusAIExpression"
+    bl_idname = "FxAIExpression"
     bl_label = "AI → Expression"
     bl_icon = "SCRIPTPLUGINS"
 
@@ -135,11 +136,11 @@ class AIExpressionNode(_AIBase):
            "Return ONLY the expression, no code fences, no explanation.")
 
     def init_sockets(self):
-        self.add_in_flow(); self.add_out_flow(); self.add_out("NexusDataSocket", "result")
+        self.add_in_flow(); self.add_out_flow()
 
     def draw_body(self, context, layout):
         layout.prop(self, "ask", text="")
-        layout.operator("nexus.ai_generate_expr", text="Generate", icon="SHADERFX").node_name = self.name
+        layout.operator("fx_nodes.ai_generate_expr", text="Generate", icon="SHADERFX").node_name = self.name
         if self.generated:
             box = layout.box()
             box.label(text=self.generated[:48], icon="SCRIPT")
@@ -159,12 +160,12 @@ class AIExpressionNode(_AIBase):
     def process(self, signal, engine):
         if not self.generated:
             return self.flow_out(signal)
-        v = dict(signal.payload); v.update(signal.context)
         try:
-            val = expr.evaluate(self.generated, v)
+            val = expr.evaluate(self.generated, self.expr_vars(signal, engine))
         except expr.ExprError as e:
             self._error = str(e); return []
-        return self.flow_out(signal, **{self.out_key: val})
+        signal.set(self.out_key, val)
+        return self.flow_out(signal)
 
 
 @register_node
@@ -174,7 +175,7 @@ class AISceneCommandNode(_AIBase):
     模型只能产出受限的指令集（create/transform/...），由本节点解释执行，
     绝不直接 exec 模型输出 —— 安全可控的'AI 驱动建模'。
     """
-    bl_idname = "NexusAISceneCommand"
+    bl_idname = "FxAISceneCommand"
     bl_label = "AI Scene Command"
     bl_icon = "OUTLINER_OB_GROUP_INSTANCE"
 
@@ -192,7 +193,7 @@ class AISceneCommandNode(_AIBase):
 
     def draw_body(self, context, layout):
         layout.prop(self, "ask", text="")
-        layout.operator("nexus.ai_scene_plan", text="Plan", icon="OUTLINER").node_name = self.name
+        layout.operator("fx_nodes.ai_scene_plan", text="Plan", icon="OUTLINER").node_name = self.name
         if self.plan:
             box = layout.box(); box.scale_y = 0.7
             try:

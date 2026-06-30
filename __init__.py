@@ -1,4 +1,4 @@
-"""NEXUS Nodes — an event-driven scripting/expression node system for Blender.
+"""Fx Nodes — an event-driven scripting/expression node system for Blender.
 
 Registration order matters:
   1. sockets   (nodes reference socket bl_idnames)
@@ -9,11 +9,11 @@ Registration order matters:
   6. add-menu categories (built from the now-populated registry)
 """
 bl_info = {
-    "name": "NEXUS Nodes",
+    "name": "Fx Nodes",
     "author": "Arena.ai Agent",
     "version": (0, 1, 0),
     "blender": (4, 3, 0),
-    "location": "Node Editor > NEXUS Logic",
+    "location": "Node Editor > Fx Nodes",
     "description": "Event-driven scripting node system: triggers, expressions, data preview, AI.",
     "category": "Node",
 }
@@ -39,8 +39,8 @@ from .nodes import data as _d            # noqa: F401
 from .nodes import ai as _ai             # noqa: F401
 
 _BASE_CLASSES = [
-    _prefs.NexusPreferences,
-    _node_tree.NexusNodeTree,
+    _prefs.FxPreferences,
+    _node_tree.FxNodeTree,
 ]
 
 
@@ -70,8 +70,9 @@ def register():
     # 5. panels
     for c in _panels.CLASSES:
         bpy.utils.register_class(c)
-    # 6. add menu
+    # 6. add menu + shortcuts
     _categories.register()
+    _operators.register_keymaps()
 
 
 def unregister():
@@ -82,6 +83,7 @@ def unregister():
     except Exception:
         pass
 
+    _operators.unregister_keymaps()
     _categories.unregister()
     for c in reversed(_panels.CLASSES):
         _safe_unreg(c)

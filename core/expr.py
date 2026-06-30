@@ -128,7 +128,7 @@ def compile_expr(src: str) -> ast.Expression:
     except SyntaxError as e:
         raise ExprError(f"语法错误: {e.msg}") from e
     _Validator().visit(tree)
-    code = compile(tree, "<nexus-expr>", "eval")
+    code = compile(tree, "<fx-nodes-expr>", "eval")
     _cache[src] = code  # type: ignore[assignment]
     return code  # type: ignore[return-value]
 
