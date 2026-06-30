@@ -372,11 +372,14 @@ class FXNODES_OT_ai_scene_plan(Operator):
             text = prov.complete(
                 [{"role": "system", "content": node.SYS},
                  {"role": "user", "content": node.ask}], temperature=0.1, max_tokens=512)
-            text = text.strip().strip("`")
-            if text.startswith("json"):
-                text = text[4:]
-            json.loads(text)   # validate
-            node.plan = text
+            if hasattr(node, "set_plan_text"):
+                node.set_plan_text(text)
+            else:
+                text = text.strip().strip("`")
+                if text.startswith("json"):
+                    text = text[4:]
+                json.loads(text)   # validate
+                node.plan = text
             self.report({'INFO'}, "Plan generated. Run engine to execute.")
         except Exception as e:
             self.report({'ERROR'}, f"plan failed: {e}"); return {'CANCELLED'}
