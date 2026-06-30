@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import bpy
 from bpy.types import NodeTree
+from bpy.props import StringProperty, IntProperty, BoolProperty
 
 from ..core.engine import GraphAdapter
 
@@ -11,6 +12,14 @@ class FxNodeTree(NodeTree):
     bl_idname = "FxNodeTree"
     bl_label = "Fx Nodes"
     bl_icon = "NODETREE"
+
+    debug_filter: StringProperty(
+        name="Filter",
+        default="",
+        description="Filter Debug panel by node name, path, key, or value text.",
+    )
+    debug_rows: IntProperty(name="Rows", default=8, min=1, max=64)
+    debug_show_empty: BoolProperty(name="Show Empty", default=False)
 
 
 class BpyGraphAdapter(GraphAdapter):

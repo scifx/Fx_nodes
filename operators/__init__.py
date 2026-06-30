@@ -197,6 +197,115 @@ class FXNODES_OT_paste_property_node(Operator):
         return {'FINISHED'}
 
 
+class FXNODES_OT_open_text_editor(Operator):
+    bl_idname = "fx_nodes.open_text_editor"
+    bl_label = "Open Text Editor"
+    bl_description = "Open the associated Text datablock in a Blender Text Editor area"
+
+    text_name: StringProperty(default="")
+
+    def execute(self, context):
+        if not self.text_name:
+            self.report({'ERROR'}, "No Text datablock selected")
+            return {'CANCELLED'}
+        text = bpy.data.texts.get(self.text_name)
+        if text is None:
+            self.report({'ERROR'}, f"Text not found: {self.text_name}")
+            return {'CANCELLED'}
+        area = next((a for a in context.window.screen.areas if a.type == 'TEXT_EDITOR'), None)
+        if area is None:
+            self.report({'INFO'}, f"Text created: {text.name}. Open a Text Editor area to edit it.")
+            return {'FINISHED'}
+        space = next((s for s in area.spaces if s.type == 'TEXT_EDITOR'), area.spaces.active)
+        space.text = text
+        self.report({'INFO'}, f"Opened Text: {text.name}")
+        return {'FINISHED'}
+
+
+class FXNODES_OT_function_new_text(Operator):
+    bl_idname = "fx_nodes.function_new_text"
+    bl_label = "Create Function Text"
+    bl_description = "Create or open a multi-line Text datablock for this Function node"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    tree_name: StringProperty()
+    node_name: StringProperty()
+
+    def execute(self, context):
+        tree = bpy.data.node_groups.get(self.tree_name)
+        node = tree.nodes.get(self.node_name) if tree else None
+        if node is None:
+            self.report({'ERROR'}, "Function node not found")
+            return {'CANCELLED'}
+        if getattr(node, "code_text_name", "") and bpy.data.texts.get(node.code_text_name):
+            text = bpy.data.texts[node.code_text_name]
+        else:
+            base = f"Fx Function - {node.name}"
+            name = base
+            i = 1
+            while bpy.data.texts.get(name):
+                i += 1
+                name = f"{base}.{i:03d}"
+            text = bpy.data.texts.new(name)
+            text.write(node.code or "# msg is a dict. You may import modules.\nmsg['payload'] = msg.get('payload')\nreturn msg")
+            node.code_text_name = text.name
+        self.report({'INFO'}, f"Function Text ready: {text.name}")
+        return {'FINISHED'}
+
+
+class FXNODES_OT_debug_clear_node(Operator):
+    bl_idname = "fx_nodes.debug_clear_node"
+    bl_label = "Clear Debug Node"
+    bl_description = "Clear one Debug node preview and its Text log"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    tree_name: StringProperty()
+    node_name: StringProperty()
+
+    def execute(self, context):
+        tree = bpy.data.node_groups.get(self.tree_name)
+        node = tree.nodes.get(self.node_name) if tree else None
+        if node is None or getattr(node, "bl_idname", "") != "FxDebug":
+            self.report({'ERROR'}, "Debug node not found")
+            return {'CANCELLED'}
+        try:
+            node["_preview"] = "{}"
+            node.fire_count = 0
+            if getattr(node, "debug_text_name", ""):
+                txt = bpy.data.texts.get(node.debug_text_name)
+                if txt:
+                    txt.clear()
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class FXNODES_OT_debug_clear_all(Operator):
+    bl_idname = "fx_nodes.debug_clear_all"
+    bl_label = "Clear All Debug"
+    bl_description = "Clear all Debug previews and Text logs in the current Fx node tree"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        tree = getattr(context.space_data, "edit_tree", None)
+        if tree is None:
+            return {'CANCELLED'}
+        count = 0
+        for node in tree.nodes:
+            if getattr(node, "bl_idname", "") != "FxDebug":
+                continue
+            node["_preview"] = "{}"
+            node.fire_count = 0
+            if getattr(node, "debug_text_name", ""):
+                txt = bpy.data.texts.get(node.debug_text_name)
+                if txt:
+                    txt.clear()
+            count += 1
+        self.report({'INFO'}, f"Cleared {count} Debug node(s)")
+        return {'FINISHED'}
+
+
 class FXNODES_OT_test_ai(Operator):
     bl_idname = "fx_nodes.test_ai"
     bl_label = "Test AI Connection"
@@ -277,6 +386,8 @@ class FXNODES_OT_ai_scene_plan(Operator):
 CLASSES = [
     FXNODES_OT_start, FXNODES_OT_stop, FXNODES_OT_fire_node, FXNODES_OT_input_listener,
     FXNODES_OT_paste_property_menu, FXNODES_OT_paste_property_node,
+    FXNODES_OT_open_text_editor, FXNODES_OT_function_new_text,
+    FXNODES_OT_debug_clear_node, FXNODES_OT_debug_clear_all,
     FXNODES_OT_test_ai, FXNODES_OT_ai_generate_expr, FXNODES_OT_ai_scene_plan,
 ]
 

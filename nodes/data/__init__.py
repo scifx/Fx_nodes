@@ -4,6 +4,11 @@ from __future__ import annotations
 import json
 from bpy.props import StringProperty, IntProperty, EnumProperty, BoolProperty
 
+try:
+    import bpy
+except Exception:  # pragma: no cover - headless tests
+    bpy = None
+
 from ...core.base import FxBaseNode
 from ...core.registry import register_node
 from ...core import expr, msgpath
@@ -24,35 +29,84 @@ class DebugNode(FxBaseNode):
     fx_color = (0.32, 0.28, 0.12)
 
     path: StringProperty(name="Path", default="msg")
-    max_rows: IntProperty(name="Max Rows", default=8, min=1, max=32)
+    max_rows: IntProperty(name="Max Rows", default=8, min=1, max=64)
     fire_count: IntProperty(name="Fires", default=0)
     show_context: BoolProperty(name="Show Runtime Context", default=False)
+    log_to_text: BoolProperty(
+        name="Log To Text",
+        default=True,
+        description="Append full multi-line debug output to a Blender Text datablock.",
+    )
+    debug_text_name: StringProperty(
+        name="Debug Text",
+        default="",
+        description="Blender Text datablock that stores the full multi-line debug log.",
+    )
 
     def init_sockets(self):
         self.add_in_flow(); self.add_out_flow()
 
     def draw_body(self, context, layout):
         layout.prop(self, "path")
-        layout.label(text=f"Fires: {self.fire_count}", icon="DRIVER")
+        row = layout.row(align=True)
+        row.label(text=f"Fires: {self.fire_count}", icon="DRIVER")
+        row.prop(self, "max_rows", text="Rows")
+
         raw = self.get("_preview", "{}")
         try:
             data = json.loads(raw)
         except Exception:
             data = {}
+        lines = self._preview_lines(data)
         box = layout.box()
-        if isinstance(data, dict):
-            if not data:
-                box.label(text="(no data yet)", icon="INFO")
-            for i, (k, val) in enumerate(data.items()):
-                if i >= self.max_rows:
-                    box.label(text=f"… +{len(data) - self.max_rows} more")
-                    break
-                row = box.row()
-                row.label(text=str(k))
-                row.label(text=str(val)[:30])
+        if lines:
+            for line in lines[:self.max_rows]:
+                box.label(text=line[:120])
+            if len(lines) > self.max_rows:
+                box.label(text=f"… +{len(lines) - self.max_rows} more lines")
         else:
-            box.label(text=str(data)[:80])
+            box.label(text="(no data yet)", icon="INFO")
+
         layout.prop(self, "show_context")
+        layout.prop(self, "log_to_text")
+        if self.log_to_text:
+            row = layout.row(align=True)
+            if bpy is not None:
+                row.prop_search(self, "debug_text_name", bpy.data, "texts", text="Log")
+            else:
+                row.prop(self, "debug_text_name", text="Log")
+            op = row.operator("fx_nodes.open_text_editor", text="", icon="TEXT")
+            op.text_name = self.debug_text_name
+
+    def _pretty(self, value):
+        try:
+            return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+        except Exception:
+            return repr(value)
+
+    def _preview_lines(self, data):
+        if data in ({}, None, ""):
+            return []
+        return self._pretty(data).splitlines()
+
+    def _ensure_debug_text(self):
+        if bpy is None:
+            return None
+        name = self.debug_text_name or f"Fx Debug - {self.name}"
+        txt = bpy.data.texts.get(name) or bpy.data.texts.new(name)
+        if self.debug_text_name != txt.name:
+            self.debug_text_name = txt.name
+        return txt
+
+    def _append_log(self, data):
+        if not self.log_to_text:
+            return
+        txt = self._ensure_debug_text()
+        if txt is None:
+            return
+        txt.write(f"\n--- fire #{self.fire_count} · {self.path} ---\n")
+        txt.write(self._pretty(data))
+        txt.write("\n")
 
     def _json_safe(self, value):
         def safe(v):
@@ -84,6 +138,7 @@ class DebugNode(FxBaseNode):
             self["_preview"] = json.dumps(data, ensure_ascii=False)
         except Exception:
             self["_preview"] = json.dumps(repr(value)[:160], ensure_ascii=False)
+        self._append_log(data)
         self._error = ""
         return self.flow_out(signal)
 

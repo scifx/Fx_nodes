@@ -1,6 +1,7 @@
 """N-panel UI in the Fx Nodes node editor: engine control + inspector + AI."""
 from __future__ import annotations
 
+import json
 import bpy
 from bpy.types import Panel
 
@@ -48,32 +49,75 @@ class FXNODES_PT_engine(FxPanelBase, Panel):
                 box.label(text=f"Errors: {s['errors']}", icon="ERROR")
 
 
-class FXNODES_PT_inspector(FxPanelBase, Panel):
-    bl_label = "Data Inspector"
-    bl_idname = "FXNODES_PT_inspector"
+class FXNODES_PT_debug(FxPanelBase, Panel):
+    bl_label = "Debug"
+    bl_idname = "FXNODES_PT_debug"
+
+    def _pretty_lines(self, data):
+        if data in ({}, None, ""):
+            return []
+        try:
+            return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True).splitlines()
+        except Exception:
+            return repr(data).splitlines()
+
+    def _match(self, node, raw, flt):
+        if not flt:
+            return True
+        haystack = f"{node.name} {getattr(node, 'path', '')} {raw}".lower()
+        return flt.lower() in haystack
 
     def draw(self, context):
         layout = self.layout
         tree = context.space_data.edit_tree
         if not tree:
             return
-        previews = [n for n in tree.nodes if n.bl_idname == "FxDebug"]
-        if not previews:
+
+        row = layout.row(align=True)
+        row.prop(tree, "debug_filter", text="", icon="VIEWZOOM")
+        row.operator("fx_nodes.debug_clear_all", text="", icon="TRASH")
+        row = layout.row(align=True)
+        row.prop(tree, "debug_rows")
+        row.prop(tree, "debug_show_empty", text="Empty")
+
+        debug_nodes = [n for n in tree.nodes if n.bl_idname == "FxDebug"]
+        if not debug_nodes:
             layout.label(text="Add a Debug node", icon="INFO")
             return
-        for n in previews:
-            box = layout.box()
-            box.label(text=n.name, icon="VIEWZOOM")
-            box.label(text=f"Fires: {n.fire_count}")
-            import json
+
+        shown = 0
+        for n in debug_nodes:
+            raw = n.get("_preview", "{}")
+            if not self._match(n, raw, tree.debug_filter):
+                continue
             try:
-                data = json.loads(n.get("_preview", "{}"))
+                data = json.loads(raw)
             except Exception:
-                data = {}
-            for k, v in list(data.items())[:6]:
-                row = box.row()
-                row.label(text=str(k))
-                row.label(text=str(v)[:24])
+                data = raw
+            lines = self._pretty_lines(data)
+            if not lines and not tree.debug_show_empty:
+                continue
+
+            box = layout.box()
+            header = box.row(align=True)
+            header.label(text=f"{n.name} · {getattr(n, 'path', 'msg')} · {n.fire_count}", icon="VIEWZOOM")
+            op = header.operator("fx_nodes.debug_clear_node", text="", icon="X")
+            op.tree_name = tree.name
+            op.node_name = n.name
+            op = header.operator("fx_nodes.open_text_editor", text="", icon="TEXT")
+            op.text_name = getattr(n, "debug_text_name", "")
+
+            if lines:
+                for line in lines[:tree.debug_rows]:
+                    box.label(text=line[:120])
+                if len(lines) > tree.debug_rows:
+                    box.label(text=f"… +{len(lines) - tree.debug_rows} more lines")
+            else:
+                box.label(text="(no data yet)", icon="INFO")
+            shown += 1
+
+        if shown == 0:
+            layout.label(text="No Debug output matches the filter", icon="INFO")
 
 
 class FXNODES_PT_ai(FxPanelBase, Panel):
@@ -89,4 +133,4 @@ class FXNODES_PT_ai(FxPanelBase, Panel):
         layout.prop(prefs, "allow_ai")
 
 
-CLASSES = [FXNODES_PT_engine, FXNODES_PT_inspector, FXNODES_PT_ai]
+CLASSES = [FXNODES_PT_engine, FXNODES_PT_debug, FXNODES_PT_ai]

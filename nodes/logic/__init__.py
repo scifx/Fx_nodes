@@ -4,6 +4,11 @@ from __future__ import annotations
 import textwrap
 from bpy.props import StringProperty, FloatProperty, IntProperty, EnumProperty
 
+try:
+    import bpy
+except Exception:  # pragma: no cover - headless tests
+    bpy = None
+
 from ...core.base import FxLogicNode
 from ...core.registry import register_node
 from ...core.signal import Signal
@@ -29,25 +34,66 @@ class FunctionNode(FxLogicNode):
     code: StringProperty(
         name="Python Code",
         default="# msg is a dict. You may import modules.\nmsg['payload'] = msg.get('payload')\nreturn msg",
-        description="Full Python code. Use return msg to continue; return None to stop.",
+        description="Legacy inline code / fallback. For multi-line editing use a Text datablock.",
+    )
+    code_text_name: StringProperty(
+        name="Code Text",
+        default="",
+        description="Optional Blender Text datablock used as the multi-line source for this Function node.",
     )
     last_result: StringProperty(name="Last", default="")
 
     def init_sockets(self):
         self.add_in_flow(); self.add_out_flow()
 
+    def _code_text(self):
+        if bpy is None or not self.code_text_name:
+            return None
+        return bpy.data.texts.get(self.code_text_name)
+
+    def get_code(self):
+        txt = self._code_text()
+        if txt is not None:
+            try:
+                return txt.as_string()
+            except Exception:
+                pass
+        return self.code or "return msg"
+
     def draw_body(self, context, layout):
-        layout.prop(self, "code", text="")
+        row = layout.row(align=True)
+        if bpy is not None:
+            row.prop_search(self, "code_text_name", bpy.data, "texts", text="Code")
+        else:
+            row.prop(self, "code_text_name", text="Code")
+        op = row.operator("fx_nodes.function_new_text", text="", icon="ADD")
+        op.node_name = self.name
+        op.tree_name = self.id_data.name
+        op = row.operator("fx_nodes.open_text_editor", text="", icon="TEXT")
+        op.text_name = self.code_text_name
+
+        code = self.get_code()
+        preview = [ln.rstrip() for ln in code.splitlines()[:4]]
+        if preview:
+            box = layout.box(); box.scale_y = 0.72
+            for ln in preview:
+                box.label(text=(ln or " ")[:80], icon="SCRIPT")
+            extra = len(code.splitlines()) - len(preview)
+            if extra > 0:
+                box.label(text=f"… +{extra} more lines")
+        if not self.code_text_name:
+            layout.prop(self, "code", text="Fallback")
         if self.last_result:
             layout.label(text=self.last_result[:60], icon="CHECKMARK")
 
     def _call_user_code(self, signal, engine):
-        body = textwrap.indent(self.code or "return msg", "    ")
+        code = self.get_code()
+        body = textwrap.indent(code or "return msg", "    ")
         src = "def _fx_user_function(msg, context, flow, global_context, node, engine):\n" + body
         ns = {}
         try:
-            import bpy  # type: ignore
-            ns["bpy"] = bpy
+            import bpy as _bpy  # type: ignore
+            ns["bpy"] = _bpy
         except Exception:
             pass
         exec(src, ns, ns)  # noqa: S102 - intentionally full Python Function node
