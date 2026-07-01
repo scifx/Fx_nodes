@@ -59,9 +59,12 @@ class KeyTriggerNode(FxTriggerNode):
     key: EnumProperty(
         name="Key",
         items=[(k, k, "") for k in (
-            "SPACE", "RET", "A", "B", "C", "D", "E", "F", "G", "S", "W", "Q", "X",
-            "ONE", "TWO", "THREE", "FOUR", "FIVE",
-            "UP_ARROW", "DOWN_ARROW", "LEFT_ARROW", "RIGHT_ARROW", "ESC",
+            "SPACE", "RET", "TAB", "ESC",
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+            "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+            "ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE",
+            "UP_ARROW", "DOWN_ARROW", "LEFT_ARROW", "RIGHT_ARROW",
+            "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
         )],
         default="SPACE",
     )
@@ -69,6 +72,16 @@ class KeyTriggerNode(FxTriggerNode):
     ctrl: BoolProperty(name="Ctrl", default=False)
     shift: BoolProperty(name="Shift", default=False)
     alt: BoolProperty(name="Alt", default=False)
+    swallow: BoolProperty(
+        name="Swallow Key",
+        default=True,
+        description="绑定后屏蔽 Blender 原有按键行为，防止冲突 (例如 SPACE 不再播放动画)"
+    )
+    block_repeats: BoolProperty(
+        name="Block Repeats",
+        default=False,
+        description="开启后忽略长按重复事件，只响应首次 PRESS；关闭则允许重复触发（默认允许重复）"
+    )
 
     def draw_body(self, context, layout):
         layout.prop(self, "key")
@@ -77,10 +90,14 @@ class KeyTriggerNode(FxTriggerNode):
         row.prop(self, "ctrl", toggle=True)
         row.prop(self, "shift", toggle=True)
         row.prop(self, "alt", toggle=True)
+        col = layout.column(align=True)
+        col.prop(self, "swallow", toggle=True, icon='HAND')
+        col.prop(self, "block_repeats")
 
     def event_source(self):
         return {"kind": "key", "key": self.key, "value": self.value,
-                "ctrl": self.ctrl, "shift": self.shift, "alt": self.alt}
+                "ctrl": self.ctrl, "shift": self.shift, "alt": self.alt,
+                "swallow": self.swallow, "block_repeats": self.block_repeats}
 
 
 @register_node
@@ -95,13 +112,19 @@ class ClickTriggerNode(FxTriggerNode):
                          default="LEFTMOUSE")
     require_hit: BoolProperty(name="Only On Object Hit", default=False,
                               description="仅当射线击中物体时点火，命中物体写入 msg['object']")
+    swallow: BoolProperty(
+        name="Swallow Click",
+        default=False,
+        description="绑定后屏蔽 Blender 原有鼠标行为（谨慎使用，可能影响选择）"
+    )
 
     def draw_body(self, context, layout):
         layout.prop(self, "button")
         layout.prop(self, "require_hit")
+        layout.prop(self, "swallow", toggle=True, icon='HAND')
 
     def event_source(self):
-        return {"kind": "click", "button": self.button, "require_hit": self.require_hit}
+        return {"kind": "click", "button": self.button, "require_hit": self.require_hit, "swallow": self.swallow}
 
 
 @register_node

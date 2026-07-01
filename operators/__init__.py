@@ -49,11 +49,45 @@ def _build_signal_from_upstream(tree, node, engine):
                 raw = n.get("_preview", "")
                 if raw:
                     try:
-                        payload = json.loads(raw)
+                        data = json.loads(raw)
+                        # Debug v2 format (no "value" key):
+                        # {"msg": {...}, "payload": ..., "topic": ..., "path": "...", "_extracted": ..., ...}
+                        # Also support legacy "value" key just in case.
+                        if isinstance(data, dict):
+                            if "_extracted" in data:
+                                payload = data["_extracted"]
+                            elif "value" in data and "msg" in data:
+                                # legacy
+                                payload = data["value"]
+                            elif "msg" in data and isinstance(data["msg"], dict):
+                                # full msg object wrapped
+                                # Prefer extracted path if available, else whole msg
+                                payload = data.get("payload", data["msg"])
+                                # If msg looks like a full Node-RED msg, use it directly later
+                                if isinstance(payload, dict) and "payload" not in payload:
+                                    # payload field from wrapper is likely the msg.payload value,
+                                    # that's fine – we store it as msg["payload"]
+                                    pass
+                            else:
+                                # raw value (show_context=False case)
+                                payload = data
+                        else:
+                            payload = data
                     except Exception:
                         pass
             if payload is not None:
                 msg["payload"] = payload
+                # Also populate msg itself if payload looks like a full msg dict
+                # (Node-RED style: msg contains payload/topic/...)
+                if isinstance(payload, dict) and ("payload" in payload or "topic" in payload or "msg" in payload):
+                    try:
+                        # If it's a wrapped debug output like {"msg": {...}, "payload": ...}
+                        if "msg" in payload and isinstance(payload["msg"], dict):
+                            msg.update(payload["msg"])
+                        else:
+                            msg.update(payload)
+                    except Exception:
+                        pass
                 break
             # walk upstream flow inputs
             try:
@@ -129,13 +163,24 @@ class FXNODES_OT_input_listener(Operator):
         if not RUNTIME.running:
             RUNTIME._modal_running = False
             return {'CANCELLED'}
-        if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE', 'TIMER'}:
+        # Always pass through mouse movement / timers to keep UI responsive
+        if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE', 'TIMER', 'TIMER_REPORT', 'TIMERREGION'}:
             return {'PASS_THROUGH'}
+
+        consumed = False
         try:
-            RUNTIME.handle_input_event(event)
+            consumed = bool(RUNTIME.handle_input_event(event))
         except Exception:
-            pass
-        return {'PASS_THROUGH'}     # never swallow events
+            # Never let a node error kill the modal listener
+            consumed = False
+
+        # If a trigger with swallow=True fired, block Blender's default key behavior
+        # by returning RUNNING_MODAL instead of PASS_THROUGH.
+        if consumed:
+            return {'RUNNING_MODAL'}
+
+        # Otherwise let Blender handle the event normally
+        return {'PASS_THROUGH'}
 
     def invoke(self, context, event):
         RUNTIME._modal_running = True

@@ -80,12 +80,30 @@ class DebugNode(FxBaseNode):
         lines = self._preview_lines(data)
         box = layout.box()
         header = box.row(align=True)
+        # Show which path is being debugged
+        path_label = self.path or "msg"
         type_str = type(data).__name__
         if isinstance(data, dict):
-            type_str = f"dict [{len(data)} keys]"
+            # show_context mode: data contains "msg", "payload", etc.
+            if "msg" in data and "_extracted" in data:
+                # show extracted value type
+                v = data.get("_extracted")
+                vt = type(v).__name__
+                if isinstance(v, dict):
+                    vt = f"dict[{len(v)}]"
+                elif isinstance(v, list):
+                    vt = f"list[{len(v)}]"
+                type_str = f"{path_label} → {vt}"
+            elif "msg" in data and "payload" in data:
+                # full context view
+                m = data.get("msg")
+                if isinstance(m, dict):
+                    type_str = f"msg dict[{len(m)}]"
+            else:
+                type_str = f"dict [{len(data)} keys]"
         elif isinstance(data, list):
             type_str = f"list [{len(data)} items]"
-        header.label(text=f"Preview ({type_str}):", icon="VIEWZOOM")
+        header.label(text=f"{path_label}: {type_str}", icon="VIEWZOOM")
         if lines:
             for line in lines[:self.max_rows]:
                 box.label(text=line[:120])
@@ -127,13 +145,32 @@ class DebugNode(FxBaseNode):
     def _json_safe(self, value):
         def safe(v):
             try:
+                # primitives
                 if isinstance(v, (int, float, str, bool)) or v is None:
                     return v
+                # list / tuple
                 if isinstance(v, (list, tuple)):
-                    return [safe(x) for x in v][:64]
+                    return [safe(x) for x in v][:128]
+                # set / frozenset / dict_keys / dict_values / dict_items -> list
+                if isinstance(v, (set, frozenset)):
+                    return [safe(x) for x in list(v)][:128]
+                # dict-like with .keys()/.items()
+                tname = type(v).__name__
+                if tname in ("dict_keys", "dict_values", "dict_items", "KeysView", "ValuesView", "ItemsView"):
+                    try:
+                        return [safe(x) for x in list(v)][:128]
+                    except Exception:
+                        pass
                 if isinstance(v, dict):
-                    return {str(k): safe(x) for k, x in list(v.items())[:64]}
-                return f"{type(v).__name__}({v!r})"[:160]
+                    return {str(k): safe(x) for k, x in list(v.items())[:128]}
+                # try to iterate mapping-like objects
+                if hasattr(v, "items") and callable(v.items):
+                    try:
+                        return {str(k): safe(x) for k, x in list(v.items())[:128]}
+                    except Exception:
+                        pass
+                # fallback: try json round-trip via str
+                return f"{tname}({str(v)!r})"[:200]
             except Exception:
                 return "<unrepr>"
         return safe(value)
@@ -143,8 +180,18 @@ class DebugNode(FxBaseNode):
         flow = self.flow_context(engine)
         glob = self.global_context(engine)
         missing = object()
+        path = (self.path or "msg").strip()
+        # Fast-path for common roots – guarantees msg returns full dict
         try:
-            value = msgpath.get(self.path, signal.msg, flow, glob, default=missing)
+            pl = path.lower()
+            if pl in ("msg", "message"):
+                value = signal.msg
+            elif pl == "payload":
+                value = signal.msg.get("payload", missing)
+            elif pl == "topic":
+                value = signal.msg.get("topic", missing)
+            else:
+                value = msgpath.get(path, signal.msg, flow, glob, default=missing)
         except msgpath.MsgPathError as e:
             self._error = str(e)
             return []
@@ -153,16 +200,27 @@ class DebugNode(FxBaseNode):
             return []
         data = self._json_safe(value)
         if self.show_context:
-            data = {
-                "value": data,
+            # No "value" backward-compat key – user explicitly requested removal.
+            # Pure Node-RED style: top-level is msg, plus runtime contexts.
+            output = {
+                "msg": self._json_safe(signal.msg),
+                "payload": self._json_safe(signal.msg.get("payload")),
+                "topic": self._json_safe(signal.msg.get("topic")),
+                "path": path,
+                "_extracted": data,  # internal, prefixed to avoid confusion with msg keys
                 "context": self._json_safe(signal.context),
                 "flow": self._json_safe(flow),
-                "Global": self._json_safe(glob),
+                "global": self._json_safe(glob),
+                "Global": self._json_safe(glob),  # keep capital alias for legacy UI
             }
+            data = output
         try:
             self["_preview"] = json.dumps(data, ensure_ascii=False)
         except Exception:
-            self["_preview"] = json.dumps(repr(value)[:160], ensure_ascii=False)
+            try:
+                self["_preview"] = json.dumps(self._json_safe(data), ensure_ascii=False)
+            except Exception:
+                self["_preview"] = json.dumps(str(value)[:500], ensure_ascii=False)
         self._append_log(data)
         self._error = ""
         return self.flow_out(signal)

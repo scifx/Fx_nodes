@@ -323,26 +323,91 @@ class FxRuntime:
 
     # ---- modal callback from operator -------------------------------------
     def handle_input_event(self, event):
-        """Called by the input modal operator for each window event."""
+        """Called by the input modal operator for each window event.
+        
+        Returns True if the event was consumed by a trigger with swallow=True,
+        so the modal operator can return RUNNING_MODAL to block Blender's
+        default behavior.
+        """
         if not self.running:
-            return
+            return False
+        consumed = False
+        # For key repeat blocking
+        is_repeat = getattr(event, "is_repeat", False)
+        # event.is_repeat is not always present in older Blender; fallback
+        if not hasattr(event, "is_repeat"):
+            is_repeat = (event.value == "PRESS" and getattr(event, "repeat", False))
+
         for tree, node in self._iter_trigger_nodes():
             src = node.event_source()
             kind = src.get("kind")
             if kind == "key":
+                # Block repeats if node requests it
+                if src.get("block_repeats", True) and is_repeat:
+                    # Still swallow repeats if swallow is on, to fully block key
+                    if (event.type == src.get("key")
+                            and event.ctrl == src.get("ctrl", False)
+                            and event.shift == src.get("shift", False)
+                            and event.alt == src.get("alt", False)
+                            and src.get("swallow", True)):
+                        consumed = True
+                    continue
                 if (event.type == src.get("key") and event.value == src.get("value")
-                        and event.ctrl == src.get("ctrl") and event.shift == src.get("shift")
-                        and event.alt == src.get("alt")):
-                    self.fire_node(tree, node, msg={"key": event.type})
+                        and event.ctrl == src.get("ctrl", False)
+                        and event.shift == src.get("shift", False)
+                        and event.alt == src.get("alt", False)):
+                    # Node-RED style msg: put primary data in payload
+                    msg = {
+                        "payload": event.type,
+                        "key": event.type,
+                        "value": event.value,
+                        "ctrl": event.ctrl,
+                        "shift": event.shift,
+                        "alt": event.alt,
+                        "oskey": getattr(event, "oskey", False),
+                        "type": event.type,
+                    }
+                    # Also enrich signal context via extra_context
+                    extra = {
+                        "event_type": event.type,
+                        "event_value": event.value,
+                    }
+                    try:
+                        self.fire_node(tree, node, msg=msg, extra_context=extra)
+                    except ReferenceError:
+                        # stale tree, ignore, will be cleaned on next start
+                        pass
+                    if src.get("swallow", True):
+                        consumed = True
             elif kind == "click":
                 if event.type == src.get("button") and event.value == "PRESS":
-                    msg = {"mouse_x": event.mouse_x, "mouse_y": event.mouse_y}
+                    msg = {
+                        "payload": {
+                            "x": event.mouse_x,
+                            "y": event.mouse_y,
+                            "button": event.type,
+                        },
+                        "mouse_x": event.mouse_x,
+                        "mouse_y": event.mouse_y,
+                        "button": event.type,
+                    }
                     if src.get("require_hit"):
                         obj = self._raycast(event)
                         if obj is None:
                             continue
-                        msg["object"] = obj
-                    self.fire_node(tree, node, msg=msg)
+                        # Store object name safely, not the RNA object itself
+                        try:
+                            msg["object"] = obj.name
+                            msg["payload"]["object"] = obj.name
+                        except Exception:
+                            msg["object"] = str(obj)
+                    try:
+                        self.fire_node(tree, node, msg=msg)
+                    except ReferenceError:
+                        pass
+                    if src.get("swallow", False):
+                        consumed = True
+        return consumed
 
     def _raycast(self, event):  # best-effort viewport pick
         try:
