@@ -55,7 +55,11 @@ class FunctionNode(FxLogicNode):
         txt = self._code_text()
         if txt is not None:
             try:
-                return txt.as_string()
+                code = txt.as_string()
+                # Fall back to inline code if Text block is empty – prevents
+                # "empty text masks valid code" bug, same as AI Scene Script fix.
+                if code and code.strip():
+                    return code
             except Exception:
                 pass
         return self.code or "return msg"

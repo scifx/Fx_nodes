@@ -125,11 +125,18 @@ class ExecutionEngine:
         return processed
 
     def _run_node(self, node: NodeLike, signal: Signal) -> List[Tuple[str, Signal]]:
+        # Clear previous error BEFORE running, not after.
+        # The old code cleared _error unconditionally AFTER process(),
+        # which instantly wiped out business-logic errors set inside
+        # node.process() (e.g. "没有脚本", "AI 生成未开启").
+        # This made the UI never show node errors.
+        if hasattr(node, "_error"):
+            node._error = ""
         try:
             result = node.process(signal, self) or []
-            if hasattr(node, "_error"):
-                node._error = ""
             self.stats.node_fired(node.node_uid)
+            # DO NOT clear node._error here – process() may have set it
+            # intentionally to report a non-exception failure.
             return list(result)
         except Exception as e:  # isolate
             msg = f"{type(e).__name__}: {e}"

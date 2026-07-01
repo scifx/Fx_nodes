@@ -61,11 +61,34 @@ def _inject_reference_context(node, engine, signal, text: str) -> str:
     ref_path = (getattr(node, "reference_path", "") or "").strip()
     if not ref_path:
         return text
+
+    # Validate path syntax first – msgpath.get swallows errors which makes
+    # debugging reference injection very hard.
     try:
-        ref = msgpath.get(ref_path, signal.msg, node.flow_context(engine), node.global_context(engine))
+        msgpath.parse(ref_path)
+    except Exception as e:
+        node._error = f"Reference path invalid: {ref_path} – {e}"
+        node.last_result = f"ref bad path: {ref_path}"
+        return text
+
+    # Use a sentinel to distinguish "key missing / read error" from an
+    # actual stored None / empty value.
+    _MISS = object()
+    msg = getattr(signal, "msg", {}) if signal is not None else {}
+    flow_ctx = node.flow_context(engine) if engine is not None else {}
+    global_ctx = node.global_context(engine) if engine is not None else {}
+    try:
+        ref = msgpath.get(ref_path, msg, flow_ctx, global_ctx, default=_MISS)
     except Exception as e:
         node._error = f"Reference read failed: {e}"
-        ref = None
+        ref = _MISS
+
+    if ref is _MISS:
+        node.last_result = f"ref missing: {ref_path}"
+        # Don't treat missing as fatal – just skip injection so the AI
+        # still runs with the base prompt.
+        return text
+
     if ref in (None, "", {}, []):
         node.last_result = f"ref empty: {ref_path}"
         return text
@@ -199,6 +222,14 @@ class AIChatNode(_AIBase):
 
     def draw_body(self, context, layout):
         layout.prop(self, "prompt", text="")
+        row = layout.row(align=True)
+        op = row.operator("fx_nodes.ai_chat_generate", text="Generate", icon="FILE_REFRESH")
+        op.node_name = self.name
+        tree = getattr(context.space_data, "edit_tree", None)
+        if tree is not None:
+            run_op = row.operator("fx_nodes.fire_node", text="Run", icon="PLAY")
+            run_op.tree_name = tree.name
+            run_op.node_name = self.name
         layout.prop(self, "out_key")
         layout.prop(self, "generate_on_flow")
         self.draw_reference_ui(layout)
@@ -207,7 +238,7 @@ class AIChatNode(_AIBase):
         col.prop(self, "temperature")
         if self.last_result:
             box = layout.box(); box.scale_y = 0.7
-            box.label(text=self.last_result[:50], icon="CHECKMARK")
+            box.label(text=self.last_result[:120], icon="CHECKMARK")
 
     def process(self, signal, engine):
         if not self.generate_on_flow:
@@ -321,6 +352,34 @@ class AIExpressionNode(_AIBase):
         return val
 
     def process(self, signal, engine):
+        # If Auto Generate is ON, always generate via AI (so reference data is fresh).
+        # This matches AIChatNode behavior and allows chaining AI nodes with Cache.
+        # If Auto Generate is OFF, use cached expression for fast local evaluation.
+        if self.auto_generate:
+            user_prompt = _inject_reference_context(self, engine, signal, _template(self.ask, signal))
+            msgs = [
+                {"role": "system", "content": self.SYS},
+                {"role": "user", "content": user_prompt},
+            ]
+            self["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
+            cont = signal.child()
+
+            def done(text, err):
+                if err:
+                    self._error = err; return
+                if not self.validate_and_store(text or ""):
+                    return
+                try:
+                    self._evaluate_to_signal(cont, engine)
+                except (expr.ExprError, msgpath.MsgPathError) as e:
+                    self._error = str(e); return
+                if hasattr(engine, "continue_from"):
+                    engine.continue_from(self.node_uid, "▶", cont)
+
+            self._run_async(engine, msgs, done, max_tokens=96)
+            return []
+
+        # Auto_generate OFF: use cached expression
         if self.generated:
             try:
                 self._evaluate_to_signal(signal, engine)
@@ -328,31 +387,7 @@ class AIExpressionNode(_AIBase):
                 self._error = str(e); return []
             return self.flow_out(signal)
 
-        if not self.auto_generate:
-            self._error = "没有表达式；点击 Generate 或开启 Auto Generate"
-            return []
-
-        user_prompt = _inject_reference_context(self, engine, signal, _template(self.ask, signal))
-        msgs = [
-            {"role": "system", "content": self.SYS},
-            {"role": "user", "content": user_prompt},
-        ]
-        self["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
-        cont = signal.child()
-
-        def done(text, err):
-            if err:
-                self._error = err; return
-            if not self.validate_and_store(text or ""):
-                return
-            try:
-                self._evaluate_to_signal(cont, engine)
-            except (expr.ExprError, msgpath.MsgPathError) as e:
-                self._error = str(e); return
-            if hasattr(engine, "continue_from"):
-                engine.continue_from(self.node_uid, "▶", cont)
-
-        self._run_async(engine, msgs, done, max_tokens=96)
+        self._error = "没有表达式；点击 Generate 或开启 Auto Generate"
         return []
 
 
@@ -389,8 +424,8 @@ class AISceneCommandNode(_AIBase):
     )
     execute_script: BoolProperty(
         name="Execute Script",
-        default=False,
-        description="Run the current Blender Python script when a flow reaches this node. Disabled by default for safety.",
+        default=True,
+        description="Run the current Blender Python script when a flow reaches this node.",
     )
     auto_generate_on_flow: BoolProperty(
         name="Generate On Flow",
@@ -404,7 +439,10 @@ class AISceneCommandNode(_AIBase):
         "The code runs inside Blender with bpy, math, random already available. "
         "Runtime variables are also available: msg dict, payload, context dict, flow dict, global_context dict, node, engine. "
         "You may create, delete, transform, animate objects, create materials, modifiers, constraints, collections, cameras, lights, drivers, and keyframes. "
-        "Prefer clear deterministic bpy code. Use object names and reusable helper functions when useful. "
+        "Prefer clear deterministic bpy.data API (bpy.data.objects.new, mesh.from_pydata, etc.) over bpy.ops, "
+        "because bpy.ops requires a VIEW_3D context and may fail in background/node execution. "
+        "If you must use bpy.ops, guard with try/except. "
+        "Use object names and reusable helper functions when useful. "
         "For results, set a variable named result to a JSON-like dict, for example result = {'created': [obj.name]}. "
         "Do not call external network APIs, do not access files, and do not run subprocesses unless the user explicitly requested it. "
         "If modifying existing objects, handle missing objects gracefully. "
@@ -443,7 +481,13 @@ class AISceneCommandNode(_AIBase):
         txt = self._script_text()
         if txt is not None:
             try:
-                return txt.as_string()
+                script = txt.as_string()
+                # If the Text datablock exists but is empty/whitespace,
+                # fall back to the stored plan – this prevents a stale
+                # empty Text block from masking a valid script, which was
+                # causing "script doesn't execute" reports.
+                if script and script.strip():
+                    return script
             except Exception:
                 pass
         return self.plan or ""
@@ -470,13 +514,23 @@ class AISceneCommandNode(_AIBase):
 
     def draw_body(self, context, layout):
         layout.prop(self, "ask", text="")
+        # Generate + Run row
         row = layout.row(align=True)
-        row.operator("fx_nodes.ai_scene_plan", text="Generate Script", icon="SCRIPT").node_name = self.name
+        op = row.operator("fx_nodes.ai_scene_plan", text="Generate", icon="FILE_REFRESH")
+        op.node_name = self.name
+        # Manual fire / run button – executes the current script immediately
+        tree = getattr(context.space_data, "edit_tree", None)
+        if tree is not None:
+            run_op = row.operator("fx_nodes.fire_node", text="Run", icon="PLAY")
+            run_op.tree_name = tree.name
+            run_op.node_name = self.name
+        # Text datablock picker
+        row2 = layout.row(align=True)
         if bpy is not None:
-            row.prop_search(self, "script_text_name", bpy.data, "texts", text="")
+            row2.prop_search(self, "script_text_name", bpy.data, "texts", text="")
         else:
-            row.prop(self, "script_text_name", text="")
-        op = row.operator("fx_nodes.open_text_editor", text="", icon="TEXT")
+            row2.prop(self, "script_text_name", text="")
+        op = row2.operator("fx_nodes.open_text_editor", text="", icon="TEXT")
         op.text_name = self.script_text_name
 
         script = self.get_script()
@@ -521,13 +575,43 @@ class AISceneCommandNode(_AIBase):
             "engine": engine,
             "result": result,
         }
-        exec(compile(script, f"<Fx AI Scene Script {self.name}>", "exec"), ns, ns)  # noqa: S102 - explicit power-user AI script node
+        code = compile(script, f"<Fx AI Scene Script {self.name}>", "exec")
+        # Blender operators (bpy.ops.*) need a proper window/area context,
+        # otherwise poll() fails when running from a timer / background.
+        # Try to provide a temp_override with a VIEW_3D area if available.
+        try:
+            ctx = bpy.context
+            window = ctx.window
+            screen = window.screen if window else None
+            area = None
+            region = None
+            if screen:
+                for a in screen.areas:
+                    if a.type == 'VIEW_3D':
+                        area = a
+                        for r in a.regions:
+                            if r.type == 'WINDOW':
+                                region = r
+                                break
+                        break
+            if area and region and hasattr(ctx, "temp_override"):
+                with ctx.temp_override(window=window, area=area, region=region, screen=screen):
+                    exec(code, ns, ns)
+            else:
+                exec(code, ns, ns)
+        except Exception:
+            # Fall back to plain exec – script may not need ops context
+            exec(code, ns, ns)
         return ns.get("result", result)
 
     def _run_script_with_result(self, script, signal, engine):
         compile(script, f"<Fx AI Scene Script {self.name}>", "exec")
+        # Manual Run (signal.source == self.node_uid) should execute even if
+        # execute_script is False – this matches user expectation of the Run button.
+        force_execute = (getattr(signal, "source", None) == self.node_uid)
+        should_execute = self.execute_script or force_execute
         exec_result = {"executed": False}
-        if self.execute_script:
+        if should_execute:
             exec_result = self._execute_script(script, signal, engine)
             if exec_result is None:
                 exec_result = {"executed": True}
@@ -542,13 +626,10 @@ class AISceneCommandNode(_AIBase):
         return exec_result
 
     def process(self, signal, engine):
-        script = self.get_script()
-
-        if not script and not self.auto_generate_on_flow:
-            self._error = "没有场景脚本；请先点击 Generate Script，或手动开启 Generate On Flow"
-            return []
-
-        if not script and self.auto_generate_on_flow:
+        # If Auto Generate is ON, always generate via AI so reference data is fresh.
+        # This allows chaining: Cache(payload=previous_result) -> AI Scene Script
+        # will see the cached payload and generate a new script each flow.
+        if self.auto_generate_on_flow:
             user_prompt = _inject_reference_context(self, engine, signal, _template(self.ask, signal))
             msgs = [
                 {"role": "system", "content": self.SYS},
@@ -570,7 +651,13 @@ class AISceneCommandNode(_AIBase):
                 if hasattr(engine, "continue_from"):
                     engine.continue_from(self.node_uid, "▶", cont)
 
-            self._run_async(engine, msgs, done, max_tokens=512)
+            self._run_async(engine, msgs, done, max_tokens=1024)
+            return []
+
+        # Auto_generate OFF: use cached script
+        script = self.get_script()
+        if not script:
+            self._error = "没有场景脚本；请先点击 Generate，或开启 Generate On Flow"
             return []
 
         try:

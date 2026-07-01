@@ -9,7 +9,66 @@ from bpy.props import StringProperty, EnumProperty
 
 from ..core.runtime import RUNTIME
 from ..core import path as path_utils
+from ..core.signal import Signal
 from ..prefs import get_preferences
+
+
+def _build_signal_from_upstream(tree, node, engine):
+    """Build a Signal with msg.payload populated from upstream Cache/Debug nodes.
+
+    Manual Generate operators run outside a flow, so signal.msg is normally empty,
+    causing reference injection (which defaults to payload) to fail.  This helper
+    walks the input Flow links backwards (max 2 hops) looking for nodes that store
+    a recent message value:
+      - FxCache : node.get("_cache_data")
+      - FxDebug : node.get("_preview")
+    If found, the value is used as payload, so Use Reference Data actually works
+    when clicking Generate in the node UI.
+    """
+    msg = {}
+    # try to find upstream cache/debug data
+    try:
+        visited = set()
+        frontier = [(node, 0)]
+        while frontier:
+            n, depth = frontier.pop(0)
+            if n.name in visited or depth > 2:
+                continue
+            visited.add(n.name)
+            # try to extract a payload-like value from this node
+            payload = None
+            bl_id = getattr(n, "bl_idname", "")
+            if bl_id == "FxCache":
+                raw = n.get("_cache_data", "")
+                if raw:
+                    try:
+                        payload = json.loads(raw)
+                    except Exception:
+                        pass
+            elif bl_id == "FxDebug":
+                raw = n.get("_preview", "")
+                if raw:
+                    try:
+                        payload = json.loads(raw)
+                    except Exception:
+                        pass
+            if payload is not None:
+                msg["payload"] = payload
+                break
+            # walk upstream flow inputs
+            try:
+                for inp in n.inputs:
+                    if not inp.is_linked:
+                        continue
+                    for link in inp.links:
+                        from_node = link.from_node
+                        if from_node:
+                            frontier.append((from_node, depth + 1))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return Signal(payload=msg, context={})
 
 
 class FXNODES_OT_start(Operator):
@@ -359,7 +418,11 @@ class FXNODES_OT_ai_generate_expr(Operator):
     node_name: StringProperty()
 
     def execute(self, context):
-        node = context.space_data.edit_tree.nodes.get(self.node_name)
+        tree = getattr(context.space_data, "edit_tree", None)
+        if not tree:
+            self.report({'ERROR'}, "No active Fx Node Tree")
+            return {'CANCELLED'}
+        node = tree.nodes.get(self.node_name)
         if not node:
             return {'CANCELLED'}
         from ..nodes.ai.provider import make_provider
@@ -369,19 +432,29 @@ class FXNODES_OT_ai_generate_expr(Operator):
         prov = make_provider("openai-compat", base_url=node.base_url_override or p.ai_base_url,
                              api_key=p.ai_api_key, model=node.model_override or p.ai_model)
         try:
-            from ..nodes.ai import _inject_reference_context
-            tree = getattr(context.space_data, "edit_tree", None)
-            engine = getattr(tree, "fx_engine", None) if tree is not None else None
-            fake_signal = SimpleNamespace(msg={"payload": None}, context={})
-            user_text = _inject_reference_context(node, engine, fake_signal, node.ask)
+            from ..nodes.ai import _inject_reference_context, _template
+            # Get a real engine so flow/global context can be read for reference injection.
+            engine = RUNTIME.get_engine(tree)
+            # Build a signal with payload populated from upstream Cache/Debug nodes
+            # if available – this fixes "reference message cannot be injected"
+            # when clicking Generate manually.
+            signal = _build_signal_from_upstream(tree, node, engine)
+            # Template the ask string the same way runtime does, then inject reference.
+            ask_templated = _template(node.ask, signal)
+            user_text = _inject_reference_context(node, engine, signal, ask_templated)
             msgs = [{"role": "system", "content": node.SYS},
                     {"role": "user", "content": user_text}]
             node["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
-            text = prov.complete(msgs, temperature=0.2, max_tokens=64)
+            text = prov.complete(msgs, temperature=0.2, max_tokens=128)
         except Exception as e:
             self.report({'ERROR'}, str(e)); return {'CANCELLED'}
         if node.validate_and_store(text):
-            self.report({'INFO'}, f"OK: {node.generated}")
+            # report reference status if any
+            ref_info = getattr(node, "last_result", "")
+            if ref_info.startswith("ref "):
+                self.report({'INFO'}, f"OK: {node.generated} | {ref_info}")
+            else:
+                self.report({'INFO'}, f"OK: {node.generated}")
         else:
             self.report({'ERROR'}, node._error)
         return {'FINISHED'}
@@ -393,7 +466,11 @@ class FXNODES_OT_ai_scene_plan(Operator):
     node_name: StringProperty()
 
     def execute(self, context):
-        node = context.space_data.edit_tree.nodes.get(self.node_name)
+        tree = getattr(context.space_data, "edit_tree", None)
+        if not tree:
+            self.report({'ERROR'}, "No active Fx Node Tree")
+            return {'CANCELLED'}
+        node = tree.nodes.get(self.node_name)
         if not node:
             return {'CANCELLED'}
         from ..nodes.ai.provider import make_provider
@@ -403,15 +480,15 @@ class FXNODES_OT_ai_scene_plan(Operator):
         prov = make_provider("openai-compat", base_url=node.base_url_override or p.ai_base_url,
                              api_key=p.ai_api_key, model=node.model_override or p.ai_model)
         try:
-            from ..nodes.ai import _inject_reference_context
-            tree = getattr(context.space_data, "edit_tree", None)
-            engine = getattr(tree, "fx_engine", None) if tree is not None else None
-            fake_signal = SimpleNamespace(msg={"payload": None}, context={})
-            user_text = _inject_reference_context(node, engine, fake_signal, node.ask)
+            from ..nodes.ai import _inject_reference_context, _template
+            engine = RUNTIME.get_engine(tree)
+            signal = _build_signal_from_upstream(tree, node, engine)
+            ask_templated = _template(node.ask, signal)
+            user_text = _inject_reference_context(node, engine, signal, ask_templated)
             msgs = [{"role": "system", "content": node.SYS},
                     {"role": "user", "content": user_text}]
             node["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
-            text = prov.complete(msgs, temperature=0.1, max_tokens=512)
+            text = prov.complete(msgs, temperature=0.1, max_tokens=1024)
             if hasattr(node, "set_plan_text"):
                 node.set_plan_text(text)
             else:
@@ -420,9 +497,67 @@ class FXNODES_OT_ai_scene_plan(Operator):
                     text = text[4:]
                 json.loads(text)   # validate
                 node.plan = text
-            self.report({'INFO'}, "Plan generated. Run engine to execute.")
+            ref_info = getattr(node, "last_result", "")
+            if ref_info.startswith("ref "):
+                self.report({'INFO'}, f"Script generated | {ref_info}")
+            else:
+                self.report({'INFO'}, "Script generated. Click Run to execute.")
         except Exception as e:
             self.report({'ERROR'}, f"plan failed: {e}"); return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class FXNODES_OT_ai_chat_generate(Operator):
+    bl_idname = "fx_nodes.ai_chat_generate"
+    bl_label = "AI Chat Generate"
+    bl_description = "Manually generate a chat response (for testing reference injection, etc.)"
+    node_name: StringProperty()
+
+    def execute(self, context):
+        tree = getattr(context.space_data, "edit_tree", None)
+        if not tree:
+            self.report({'ERROR'}, "No active Fx Node Tree")
+            return {'CANCELLED'}
+        node = tree.nodes.get(self.node_name)
+        if not node:
+            return {'CANCELLED'}
+        from ..nodes.ai.provider import make_provider
+        p = get_preferences(context)
+        if not p.allow_ai:
+            self.report({'ERROR'}, "AI disabled in prefs"); return {'CANCELLED'}
+        prov = make_provider("openai-compat",
+                             base_url=node.base_url_override or p.ai_base_url,
+                             api_key=p.ai_api_key,
+                             model=node.model_override or p.ai_model)
+        try:
+            from ..nodes.ai import _inject_reference_context, _template
+            from ..core import msgpath
+            engine = RUNTIME.get_engine(tree)
+            signal = _build_signal_from_upstream(tree, node, engine)
+            prompt_templated = _template(node.prompt, signal)
+            user_text = _inject_reference_context(node, engine, signal, prompt_templated)
+            msgs = [
+                {"role": "system", "content": node.system},
+                {"role": "user", "content": user_text},
+            ]
+            node["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
+            text = prov.complete(msgs, temperature=node.temperature, max_tokens=512)
+            # Store result like runtime does
+            node._error = ""
+            node.last_result = text or ""
+            try:
+                msgpath.set(node.out_key, text, signal.msg,
+                            node.flow_context(engine), node.global_context(engine))
+            except Exception as e:
+                node._error = str(e)
+                self.report({'ERROR'}, node._error)
+                return {'CANCELLED'}
+            ref_info = getattr(node, "last_result", "")
+            self.report({'INFO'}, f"Chat OK ({len(text)} chars)" + (f" | {ref_info}" if ref_info.startswith("ref ") else ""))
+        except Exception as e:
+            node._error = str(e)
+            self.report({'ERROR'}, f"chat failed: {e}")
+            return {'CANCELLED'}
         return {'FINISHED'}
 
 
@@ -433,6 +568,7 @@ CLASSES = [
     FXNODES_OT_debug_clear_node, FXNODES_OT_debug_clear_all,
     FXNODES_OT_cache_clear_node,
     FXNODES_OT_test_ai, FXNODES_OT_ai_generate_expr, FXNODES_OT_ai_scene_plan,
+    FXNODES_OT_ai_chat_generate,
 ]
 
 
