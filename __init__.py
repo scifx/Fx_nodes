@@ -128,6 +128,13 @@ def register():
     # 6. add menu + shortcuts
     _categories.register()
     _operators.register_keymaps()
+    # Default UX: the engine starts ON.  The N-panel Start/Stop button remains
+    # the global master switch; when stopped, Runtime.fire_node refuses all flow.
+    try:
+        from .core.runtime import RUNTIME
+        RUNTIME.start()
+    except Exception:
+        pass
 
 
 def unregister():

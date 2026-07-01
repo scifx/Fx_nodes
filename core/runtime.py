@@ -146,6 +146,19 @@ class FxRuntime:
                     yield tree, node
 
     def fire_node(self, tree, node, extra_context=None, msg=None):
+        """Fire a node only while the runtime master switch is ON.
+
+        The N-panel Start/Stop button is the single global gate for the whole
+        flow system.  UI buttons, manual triggers, key/click/timer handlers and
+        tests may all reach this method, so keep the guard here instead of only
+        in individual operators.
+        """
+        if not self.running:
+            try:
+                node._error = "Fx Nodes engine is stopped; press Start in the N-panel before firing nodes."
+            except Exception:
+                pass
+            return 0
         eng = self.get_engine(tree)
         adapter = self.adapters.get(tree.name)
         if adapter is not None:

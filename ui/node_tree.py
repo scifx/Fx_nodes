@@ -13,6 +13,18 @@ class FxNodeTree(NodeTree):
     bl_label = "Fx Nodes"
     bl_icon = "NODETREE"
 
+    def init(self):
+        """New Fx node trees default to an ON engine.
+
+        Users can still stop everything from the N-panel.  This only sets the
+        initial/default state when a tree is created.
+        """
+        try:
+            from ..core.runtime import RUNTIME
+            RUNTIME.start()
+        except Exception:
+            pass
+
     debug_filter: StringProperty(
         name="Filter",
         default="",

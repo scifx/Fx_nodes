@@ -139,6 +139,13 @@ class FXNODES_OT_fire_node(Operator):
         node = tree.nodes.get(self.node_name)
         if not node:
             self.report({'ERROR'}, "node not found"); return {'CANCELLED'}
+        if not RUNTIME.running:
+            try:
+                node._error = "Fx Nodes engine is stopped; press Start in the N-panel before firing nodes."
+            except Exception:
+                pass
+            self.report({'WARNING'}, "Fx Nodes engine is stopped; press Start in the N-panel first")
+            return {'CANCELLED'}
         try:
             RUNTIME.fire_node(tree, node)
         except ReferenceError as e:

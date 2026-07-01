@@ -20,9 +20,14 @@ class ManualTriggerNode(FxTriggerNode):
     bl_icon = "HAND"
 
     def draw_body(self, context, layout):
-        op = layout.operator("fx_nodes.fire_node", text="Fire ▶", icon="PLAY")
+        from ...core.runtime import RUNTIME
+        row = layout.row()
+        row.enabled = bool(RUNTIME.running)
+        op = row.operator("fx_nodes.fire_node", text="Fire ▶", icon="PLAY")
         op.node_name = self.name
         op.tree_name = self.id_data.name
+        if not RUNTIME.running:
+            layout.label(text="Engine stopped — press Start in N-panel", icon="RADIOBUT_OFF")
 
     def event_source(self):
         return {"kind": "manual"}

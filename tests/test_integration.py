@@ -289,6 +289,28 @@ class TestIntegration(unittest.TestCase):
         self.assertTrue(hasattr(node, "draw_body"))
         self.assertTrue(hasattr(node, "draw_previews"))
 
+    def test_runtime_fire_node_obeys_master_switch(self):
+        from Fx_nodes.core.runtime import FxRuntime
+
+        rt = FxRuntime()
+        rt.running = False
+        called = []
+        rt.get_engine = lambda tree: called.append(tree)  # type: ignore[assignment]
+        node = types.SimpleNamespace(_error="", node_uid="Tree/Manual")
+        tree = types.SimpleNamespace(name="Tree")
+
+        self.assertEqual(rt.fire_node(tree, node), 0)
+        self.assertEqual(called, [])
+        self.assertIn("engine is stopped", node._error)
+
+    def test_register_starts_runtime_by_default(self):
+        from Fx_nodes.core.runtime import RUNTIME
+        self.addon.unregister()
+        self.assertFalse(RUNTIME.running)
+        self.addon.register()
+        self.assertTrue(RUNTIME.running)
+        self.addon.unregister()
+
     def test_dynamic_timer_trigger_updates(self):
         from Fx_nodes.core.runtime import RUNTIME
         from Fx_nodes.nodes.trigger import TimerTriggerNode

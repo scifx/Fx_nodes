@@ -237,6 +237,16 @@ class FxBaseNode(Node):
                 pass
         self.init_sockets()
         self.ensure_flow_sockets_top()
+        # Runtime starts ON by default at add-on/tree creation.  If the user adds
+        # key/click triggers while it is already running, make sure the modal
+        # input listener is installed without requiring a Stop/Start cycle.
+        try:
+            if hasattr(self, "event_source"):
+                from .runtime import RUNTIME
+                if RUNTIME.running:
+                    RUNTIME._ensure_modal()
+        except Exception:
+            pass
 
     def init_sockets(self):
         """Override: create inputs/outputs."""
