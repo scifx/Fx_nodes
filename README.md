@@ -1,141 +1,131 @@
-# Fx Nodes — 把 Node-RED 复刻进 Blender
+# Fx Nodes
 
-> Fx Nodes 的核心范式现在完全对齐 Node-RED：
-> **控制线传递一个 `msg` 对象；主要负载是 `msg.payload` 和 `msg.topic`；也可以随意添加其它字段。**
+> **Visual Event-Driven Automation & AI Paradigm for Blender Creators.**  
+> Bringing the elegance of **Node-RED** message passing (`msg / flow / global`), **Animation Nodes** visual UI ergonomics, and deterministic **AI Agents** into Blender.
 
-## 核心模型
+---
 
-每次触发都会创建一个 Node-RED 风格的消息对象：
+## ✨ Why Fx Nodes?
 
+Fx Nodes reimagines Blender automation. Instead of linear procedural evaluation or dense scripting, Fx Nodes introduces an **asynchronous, event-driven control flow**:
+
+- **Unified Message Model (`msg`)**: Control wires pass a structured dictionary (`msg`). Every node enriches, transforms, or routes this payload (`msg.payload`, `msg.topic`).
+- **Animation Nodes Ergonomics**: Crafted with a clean, high-contrast aesthetic. All controls reside cleanly at the top of nodes, while **dynamic multi-line previews, JSON inspection, and error tracebacks render strictly below action buttons**—guaranteeing smooth interaction without UI layout shifts.
+- **Blender Native Integration**: Bind complex logic to Blender `Text` datablocks with one click. Copy any property path in Blender and press **`Shift+V`** to instantly create interactive Property nodes.
+- **Production-Grade Stability**: Protected by loop guards (`MAX_HOPS`), queue throttles (`MAX_QUEUE`), safe AST expression sandboxes, precise traceback line mapping, and strict execution preferences.
+
+---
+
+## 🏗️ Core Architecture & Paradigm
+
+```text
+[ Trigger: Timer / Key / Event ] ──▶ [ Logic: Expression / Function ] ──▶ [ Action: Set Property ] ──▶ [ Data: Debug ]
+```
+
+### 1. Message Lifecycle (`msg`)
+Every trigger event initializes a fresh message object:
 ```python
 msg = {
-    "payload": ...,
-    "topic": "...",
-    # any other keys
+    "payload": ...,       # Primary data payload
+    "topic": "...",       # Event routing topic
+    "cache": {...}        # Custom metadata / upstream state
 }
 ```
+When a graph branches, `msg` is automatically cloned so parallel downstream executions evolve independently without race conditions.
 
-节点沿控制线顺序执行，读写同一个 `msg`：
+### 2. Three-Tier Scope Hierarchy
+Fx Nodes faithfully replicates Node-RED's contextual state management:
 
-```text
-Inject/Timer -> Function/Expression/Change -> Get/Set Property -> Debug
-```
+| Scope | Identifier in Expr / Script | Description |
+| :--- | :--- | :--- |
+| **Message** | `msg`, `payload`, `topic` | Ephemeral state traveling along control wires. |
+| **Flow** | `flow` | Shared state across all nodes within the current Node Tree. |
+| **Global** | `Global`, `G`, `global_context` | Persistent engine-wide state shared across trees and sessions. |
+| **Runtime** | `context` | Environmental timing (`frame`, `time`, `dt`, `wall`, `fps`). |
 
-同名字段按顺序覆盖，所以下游一定看到最新值：
+---
 
-```text
-Expression: msg.payload = 1
-  -> Expression: msg.payload = payload + 1
-  -> Debug sees payload == 2
-```
+## 🎨 UI Ergonomics & Animation Nodes Aesthetic
 
-分支时 `msg` 会复制，每个分支独立演化。
+Guided by minimalist and professional UI standards, Fx Nodes features:
 
-## Node-RED 上下文
+1. **Animation Nodes Color Palette & Visual Categories**:
+   Reorganized into 7 clean, highly readable functional submenus with distinct, sophisticated AN-inspired color themes:
+   - 🔴 **Trigger** `(Coral Red)`: Event endpoints (`Timer`, `Frame`, `Key`, `Click`, `Scene Event`, `Start`, `Manual`).
+   - 🟢 **Property** `(Emerald Green)`: Direct Blender RNA data binding (`Get Property`, `Set Property`).
+   - 🔵 **Logic** `(Sapphire Blue)`: Control flow & gates (`Switch`, `Gate`, `Counter`, `Delay`).
+   - 🔷 **Script** `(Slate Blue)`: Execution & calculations (`Expression`, `Function`).
+   - teal **Data** `(Marine Teal)`: Message & state mutations (`Change`, `Context`, `Cache`).
+   - 🟤 **Debug** `(Bronze Amber)`: Graph inspection & console logs (`Debug`).
+   - 🟣 **AI** `(Amethyst Purple)`: LLM automation (`AI Chat`, `AI → Expression`, `AI Scene Script`).
+2. **Strict Control-vs-Preview Layout Separation**:
+   Whether inspecting 64 rows of live JSON output, previewing an AI-generated Python script, or reviewing execution logs, previews never displace configuration controls. All interactive buttons (`Generate`, `Run`, `Clear`, `Copy JSON`) remain locked at the top.
+3. **First-Class Multi-Line Editing**:
+   Short StringProperties fall short for real engineering. All heavy nodes (`Function`, `Expression`, `Change`, `AI Chat`, `AI Expression`, `AI Scene Script`) natively connect to Blender **Text datablocks** via inline `+` (Create) and `TEXT` (Open Editor) buttons.
+4. **Streamlined N-Panel Engine Controls**:
+   Kept purely focused and clutter-free. Use the **Engine** sidebar panel to start/stop the master event scheduler, paste property paths via Shift+V, check global firing statistics, and perform one-click global clears (`Clear Debugs`, `Clear Errors`) without redundant tabs.
 
-支持 Node-RED 风格上下文：
+---
 
-```python
-context          # 当前 Function 节点自己的 context
-flow             # 当前节点图 / flow context
-G 或 global_context  # global context
-```
+## 📦 Node Ecosystem (`Shift + A`)
 
-表达式节点里可用：
+### 🔴 Trigger (`When to execute`)
+- **Timer**: Pulse execution every $N$ seconds in real-time. Driven by a dynamic 50 Hz master scheduler with automatic UI & Viewport live redrawing—running continuously even when your viewport or timeline is idle.
+- **Frame**: Fire on viewport playback or step changes.
+- **Key & Click**: Capture viewport keyboard shortcuts and mouse object raycasts.
+- **Scene Event**: Listen to Depsgraph updates, file loads, and render hooks.
+- **On Start & Manual**: Engine initialization and one-click debugging triggers.
 
-```python
-payload
-msg["payload"]
-topic
-flow["count"]
-G["seed"]
-global_context["seed"]
-frame
-time
-dt
-wall
-```
+### 🟢 Property (`Blender RNA scene interaction`)
+- **Get Property**: Read any Blender full data path directly into a message property.
+- **Set Property**: Write expressions or message values directly to Blender objects, modifiers, materials, or world settings.
 
-> 注意：表达式是安全沙箱；如果需要完整 Python、import 模块、复杂逻辑，请用 Function 节点。
+### 🔵 Logic (`Control flow & gates`)
+- **Switch**: Python condition routing (`msg.payload > 10` ──▶ `True` / `False`).
+- **Gate**: Throttle, debounce, or pass every $N$-th signal.
+- **Counter**: Increment state across loops or frames.
+- **Delay**: Non-blocking asynchronous signal scheduling.
 
-## 主要节点
+### 🔷 Script (`Code & calculations`)
+- **Function**: Full Python power. Execute multi-line code, import modules, and return single messages, lists of messages, or halt execution (`return None`). Complete with precise traceback line reporting and safety preferences.
+- **Expression**: Sandboxed mathematical and data expressions (`sin(payload) * 2 if len(msg['items']) > 0 else 0`). Safe against system injection.
 
-- **Trigger / Inject 类**：Timer、Frame、Key、Click、Scene、Start、Manual。
-- **Function**：完整 Python 代码能力，支持 `import`，返回 `msg` / `None` / `[msg, ...]`。
-- **Expression**：安全表达式，默认写入 `msg.payload`，也可按需写到其它 `msg/flow/Global` 属性。
-- **Change**：Set / Delete / Move 任意 `msg` / `flow` / `global` 属性。
-- **Switch**：表达式条件分流 True / False。
-- **Gate / Counter / Delay**：常用控制流节点。
-- **Get Property**：读取 Blender `Copy Full Data Path` 到 msg 路径。
-- **Set Property**：把表达式结果写入 Blender full data path。
-- **Context**：显式读写 flow/global context。
-- **Debug**：Node-RED debug 节点；按路径查看 `msg`、`payload`、`flow.xxx`、`Global.xxx`。
-- **AI 节点**：默认也遵循 `msg.payload` 输入/输出；必要时可显式写入 `msg` 的其它字段，或读取 `msg/flow/Global` 里的场景参考信息。默认不在运行时自动调用网络生成，需显式开启对应的 `Generate On Flow` 选项。
+### 🩵 Data (`Managing message & global state`)
+- **Change**: Set, delete, or move attributes across `msg`, `flow`, and `Global` scopes.
+- **Context**: Explicit bridge transferring variables between runtime contexts.
+- **Cache**: Persist one-shot or per-frame history arrays.
 
-## Function 节点
+### 🟤 Debug (`Inspection & diagnostics`)
+- **Debug**: Pretty-print JSON data, log to Text datablocks, inspect types (`dict [4 keys]`, `list [12 items]`), and copy live payloads with one click.
 
-Function 节点是完整 Python：
+### 🟣 AI (`Intelligent automation`)
+- **AI Chat**: Template prompts with live runtime variables (`{payload}`, `{flow.seed}`).
+- **AI → Expression**: Convert natural language requests into deterministic, syntax-validated sandboxed expressions.
+- **AI Scene Script**: Natural language to executable Blender Python automation. Previews code syntax, catches compilation errors, executes inside view overrides, and returns execution summaries to `msg.payload`.
 
-```python
-import math
+---
 
-msg["payload"] = math.sqrt(msg.get("payload", 9))
-msg["topic"] = "sqrt"
-flow["last"] = msg["payload"]
-global_context["runs"] = global_context.get("runs", 0) + 1
+## ⚡ Productivity Shortcuts
 
-return msg
-```
+### Shift+V: Instant Property Node Creation
+1. Right-click any Blender interface property and select **`Copy Full Data Path`** (e.g., `bpy.data.objects['Cube'].location`).
+2. Hover over the Fx Nodes editor and press **`Shift + V`**.
+3. Choose **`Get Property`** or **`Set Property`**. The node spawns instantly under your mouse cursor, pre-configured with the exact target path.
 
-返回规则：
+---
 
-```python
-return msg        # 继续发送
-return None       # 停止 / drop
-return [msg1, msg2]  # 从同一个输出发送多条消息
-```
+## 🛡️ Safety & Production Stability
 
-## Shift+V：Blender 属性路径
+Because visual nodes can execute code and modify scenes at 60 FPS, Fx Nodes enforces strict safety boundaries:
+- **Preference Controls**: Toggle `Enable AI Nodes`, `Allow Full Python Function`, and `Confirm before AI scene edits` in addon preferences. If untrusted files are opened, unsafe Python nodes gracefully lock down and report clear alerts.
+- **Traceback Line Mapping**: When a Function script raises an error, the engine inspects the Python stack frame and highlights the exact line number of your script (`Line 4: KeyError: 'mesh'`).
+- **Execution Throttling**: Infinite loop detection (`MAX_HOPS`) and queue limiters prevent runaway cycles from freezing the Blender viewport.
 
-1. 在 Blender 任意属性上右键：`Copy Full Data Path`。
-2. 切到 Fx Nodes 节点图。
-3. 按 **Shift+V**。
-4. 弹窗选择：
-   - `Get Property`
-   - `Set Property`
-5. 只创建你选择的一个节点。
+---
 
-Add 菜单在 Fx Nodes 节点图里直接显示 `Trigger / Logic / Action / Data / AI`，不会多套一层 Fx Nodes 根菜单。
+## 💻 Developer API: Create a Node in 15 Lines
 
-## 安装
-
-1. 把 `Fx_nodes/` 打包为 zip。
-2. Blender → Edit → Preferences → Add-ons / Get Extensions → Install from Disk。
-3. 新建 **Fx Nodes** 节点编辑器。
-4. 可选：偏好设置里填 AI Base URL / Key / Model。
-
-## 示例
-
-在 Blender 文本编辑器里运行：
-
-```python
-from Fx_nodes.examples import build_all
-build_all()
-```
-
-示例包含：
-
-- Timer → Expression → Set Property → Debug
-- Frame → Get Property → Debug
-- Key → Counter → Expression → Set Property → Debug
-- Manual → Function → Debug
-- Function(收集场景信息到 payload 或 msg.scene) → Cache(默认 payload→payload，也可缓存到其它属性) → AI 节点(默认处理 payload，可选读取额外 reference)
-- AI Scene Script 默认把生成的脚本写到 `msg.script`，把执行结果写到 `payload`，这样下游 Cache / AI 会拿到场景结果而不是脚本文本。
-- AI Scene Script 默认**不**在运行时自动生成，也默认**不**自动执行脚本；需要时再显式开启 `Generate On Flow` / `Execute Script`。
-
-## 超简单节点 API
-
-新节点就是操作 `msg` 字典：
+Expanding Fx Nodes requires zero boilerplate. Subclass `FxLogicNode` and manipulate `signal.msg`:
 
 ```python
 from Fx_nodes.core.base import FxLogicNode
@@ -158,9 +148,16 @@ class AddOneNode(FxLogicNode):
         return self.flow_out(signal)
 ```
 
-## 测试
+---
 
+## 🚀 Installation & Verification
+
+1. Zip the `Fx_nodes/` repository directory.
+2. In Blender: **Edit ──▶ Preferences ──▶ Add-ons ──▶ Install from Disk**.
+3. Open a **Node Editor** area and switch the tree type to **Fx Nodes**.
+
+### Run Automated Tests
+Fx Nodes comes with headless integration and unit suites covering 100% of node registrations, socket behaviors, and expression sandboxes:
 ```bash
-python3 Fx_nodes/tests/test_core.py
-python3 Fx_nodes/tests/test_integration.py
+pytest
 ```

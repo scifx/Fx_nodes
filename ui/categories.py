@@ -12,8 +12,14 @@ from bpy.types import Menu
 from ..core.registry import CATEGORIES, NODE_CLASSES, ordered_categories
 
 _CAT_ICON = {
-    "Trigger": "PLAY", "Logic": "SCRIPT", "Action": "MODIFIER",
-    "Data": "VIEWZOOM", "AI": "OUTLINER_OB_LIGHT", "Utility": "DOT",
+    "Trigger": "PLAY",
+    "Property": "RNA",
+    "Logic": "TRIA_RIGHT",
+    "Script": "SCRIPT",
+    "Data": "FILE_CACHE",
+    "Debug": "VIEWZOOM",
+    "AI": "OUTLINER_OB_LIGHT",
+    "Utility": "DOT",
 }
 
 _submenu_classes = []

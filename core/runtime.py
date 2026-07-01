@@ -35,6 +35,7 @@ class FxRuntime:
         self._modal_running = False
         self._async_results: "queue.Queue[tuple]" = queue.Queue()
         self._delayed: List[Tuple[float, str, str, Signal]] = []   # (fire_time, tree, sock_owner, signal)
+        self._timer_last_fire: Dict[str, float] = {}               # node_uid -> last fire time
         self.running = False
 
     # ---- engine context ---------------------------------------------------
@@ -166,6 +167,7 @@ class FxRuntime:
         if self.running or not _HAS_BPY:
             return
         self.running = True
+        self._timer_last_fire.clear()
         self._install_frame_handler()
         self._install_timer_triggers()
         self._install_scene_handlers()
@@ -191,6 +193,7 @@ class FxRuntime:
                 pass
         self._timer_fns.clear()
         self._delayed.clear()
+        self._timer_last_fire.clear()
         self._modal_running = False
 
     # ---- handler installers ------------------------------------------------
@@ -233,48 +236,57 @@ class FxRuntime:
         make("load_post", handlers.load_post)
 
     def _install_timer_triggers(self):
-        # one bpy timer per distinct interval, simplest correct approach
-        seen = set()
-        for tree, node in self._iter_trigger_nodes():
-            src = node.event_source()
-            if src.get("kind") != "timer" or not src.get("enabled", True):
-                continue
-            interval = max(0.01, float(src.get("interval", 1.0)))
-            key = round(interval, 3)
-            if key in seen:
-                continue
-            seen.add(key)
-            self._register_timer(interval)
+        pass
 
     def _register_timer(self, interval):
-        def tick():
-            if not self.running:
-                return None
-            for tree, node in self._iter_trigger_nodes():
-                src = node.event_source()
-                if src.get("kind") == "timer" and src.get("enabled", True):
-                    if abs(float(src.get("interval", 1.0)) - interval) < 1e-3:
-                        self.fire_node(tree, node)
-            return interval
-        bpy.app.timers.register(tick, first_interval=interval)
-        self._timer_fns.append(tick)
+        pass
+
+    def _tag_redraw_ui(self):
+        if not _HAS_BPY or not hasattr(bpy, "context") or not bpy.context:
+            return
+        try:
+            wm = getattr(bpy.context, "window_manager", None)
+            if wm:
+                for window in wm.windows:
+                    screen = getattr(window, "screen", None)
+                    if screen:
+                        for area in screen.areas:
+                            if area.type in {'NODE_EDITOR', 'VIEW_3D', 'PROPERTIES'}:
+                                area.tag_redraw()
+        except Exception:
+            pass
 
     def _install_main_tick(self):
-        """A fast housekeeping timer: drains async results + fires delayed flows."""
+        """Master dynamic clock: runs timer triggers in real-time, drains async results, and updates viewport live."""
         def housekeep():
             if not self.running:
                 return None
-            # async AI results
+            fired_any = False
+            now = time.time()
+
+            # 1. Dynamic real-time Timer Triggers (works even when UI/timeline is idle)
+            for tree, node in self._iter_trigger_nodes():
+                src = node.event_source()
+                if src.get("kind") == "timer" and src.get("enabled", True):
+                    interval = max(0.01, float(src.get("interval", 1.0)))
+                    last = self._timer_last_fire.get(node.node_uid, 0.0)
+                    if now - last >= interval:
+                        self._timer_last_fire[node.node_uid] = now
+                        self.fire_node(tree, node)
+                        fired_any = True
+
+            # 2. Async AI results
             drained = 0
             while not self._async_results.empty() and drained < 8:
                 uid, tree_name, res, err, on_done = self._async_results.get()
                 try:
                     on_done(res, err)
+                    fired_any = True
                 except Exception as e:
                     self._record_error(tree_name, uid, f"async callback failed: {type(e).__name__}: {e}")
                 drained += 1
-            # delayed continuations
-            now = time.time()
+
+            # 3. Delayed continuations
             due = [d for d in self._delayed if d[0] <= now]
             for d in due:
                 self._delayed.remove(d)
@@ -282,9 +294,16 @@ class FxRuntime:
                 tree = bpy.data.node_groups.get(tree_name)
                 if tree:
                     eng = self.get_engine(tree)
-                    eng.continue_from(uid, "▶", sig)
-            return 0.05
-        bpy.app.timers.register(housekeep, first_interval=0.05)
+                    if hasattr(eng, "continue_from"):
+                        eng.continue_from(uid, "▶", sig)
+                        fired_any = True
+
+            # 4. Tag live UI & viewport redraw if any node fired
+            if fired_any:
+                self._tag_redraw_ui()
+
+            return 0.02
+        bpy.app.timers.register(housekeep, first_interval=0.02)
         self._timer_fns.append(housekeep)
 
     def _fire_start_triggers(self):

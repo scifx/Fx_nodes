@@ -335,6 +335,66 @@ class FXNODES_OT_function_new_text(Operator):
         return {'FINISHED'}
 
 
+class FXNODES_OT_node_new_text(Operator):
+    bl_idname = "fx_nodes.node_new_text"
+    bl_label = "Create Node Text"
+    bl_description = "Create or link a multi-line Text datablock for this node property"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    tree_name: StringProperty()
+    node_name: StringProperty()
+    prop_name: StringProperty(default="code_text_name")
+    fallback_prop: StringProperty(default="code")
+    prefix: StringProperty(default="Fx Text")
+
+    def execute(self, context):
+        tree = bpy.data.node_groups.get(self.tree_name)
+        node = tree.nodes.get(self.node_name) if tree else None
+        if node is None:
+            self.report({'ERROR'}, "Node not found")
+            return {'CANCELLED'}
+        current_name = getattr(node, self.prop_name, "")
+        if current_name and bpy.data.texts.get(current_name):
+            text = bpy.data.texts[current_name]
+        else:
+            base = f"{self.prefix} - {node.name}"
+            name = base
+            i = 1
+            while bpy.data.texts.get(name):
+                i += 1
+                name = f"{base}.{i:03d}"
+            text = bpy.data.texts.new(name)
+            fallback_content = getattr(node, self.fallback_prop, "") or ""
+            if fallback_content:
+                text.write(fallback_content)
+            setattr(node, self.prop_name, text.name)
+        self.report({'INFO'}, f"Text ready: {text.name}")
+        return {'FINISHED'}
+
+
+class FXNODES_OT_debug_copy_json(Operator):
+    bl_idname = "fx_nodes.debug_copy_json"
+    bl_label = "Copy JSON"
+    bl_description = "Copy this Debug node's preview data to system clipboard"
+
+    tree_name: StringProperty()
+    node_name: StringProperty()
+
+    def execute(self, context):
+        tree = bpy.data.node_groups.get(self.tree_name)
+        node = tree.nodes.get(self.node_name) if tree else None
+        if node is None:
+            return {'CANCELLED'}
+        raw = node.get("_preview", "{}")
+        try:
+            formatted = json.dumps(json.loads(raw), ensure_ascii=False, indent=2)
+        except Exception:
+            formatted = raw
+        context.window_manager.clipboard = formatted
+        self.report({'INFO'}, f"Copied {len(formatted)} chars to clipboard")
+        return {'FINISHED'}
+
+
 class FXNODES_OT_debug_clear_node(Operator):
     bl_idname = "fx_nodes.debug_clear_node"
     bl_label = "Clear Debug Node"
@@ -485,7 +545,8 @@ class FXNODES_OT_ai_generate_expr(Operator):
             # when clicking Generate manually.
             signal = _build_signal_from_upstream(tree, node, engine)
             # Template the ask string the same way runtime does, then inject reference.
-            ask_templated = _template(node.ask, signal)
+            ask_val = getattr(node, "get_ask", lambda: node.ask)()
+            ask_templated = _template(ask_val, signal)
             user_text = _inject_reference_context(node, engine, signal, ask_templated)
             msgs = [{"role": "system", "content": node.SYS},
                     {"role": "user", "content": user_text}]
@@ -528,7 +589,8 @@ class FXNODES_OT_ai_scene_plan(Operator):
             from ..nodes.ai import _inject_reference_context, _template
             engine = RUNTIME.get_engine(tree)
             signal = _build_signal_from_upstream(tree, node, engine)
-            ask_templated = _template(node.ask, signal)
+            ask_val = getattr(node, "get_ask", lambda: node.ask)()
+            ask_templated = _template(ask_val, signal)
             user_text = _inject_reference_context(node, engine, signal, ask_templated)
             msgs = [{"role": "system", "content": node.SYS},
                     {"role": "user", "content": user_text}]
@@ -579,10 +641,12 @@ class FXNODES_OT_ai_chat_generate(Operator):
             from ..core import msgpath
             engine = RUNTIME.get_engine(tree)
             signal = _build_signal_from_upstream(tree, node, engine)
-            prompt_templated = _template(node.prompt, signal)
+            prompt_val = getattr(node, "get_prompt", lambda: node.prompt)()
+            system_val = getattr(node, "get_system", lambda: node.system)()
+            prompt_templated = _template(prompt_val, signal)
             user_text = _inject_reference_context(node, engine, signal, prompt_templated)
             msgs = [
-                {"role": "system", "content": node.system},
+                {"role": "system", "content": system_val},
                 {"role": "user", "content": user_text},
             ]
             node["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
@@ -609,8 +673,8 @@ class FXNODES_OT_ai_chat_generate(Operator):
 CLASSES = [
     FXNODES_OT_start, FXNODES_OT_stop, FXNODES_OT_fire_node, FXNODES_OT_input_listener,
     FXNODES_OT_paste_property_menu, FXNODES_OT_paste_property_node,
-    FXNODES_OT_open_text_editor, FXNODES_OT_function_new_text,
-    FXNODES_OT_debug_clear_node, FXNODES_OT_debug_clear_all, FXNODES_OT_debug_clear_errors,
+    FXNODES_OT_open_text_editor, FXNODES_OT_function_new_text, FXNODES_OT_node_new_text,
+    FXNODES_OT_debug_clear_node, FXNODES_OT_debug_copy_json, FXNODES_OT_debug_clear_all, FXNODES_OT_debug_clear_errors,
     FXNODES_OT_cache_clear_node,
     FXNODES_OT_test_ai, FXNODES_OT_ai_generate_expr, FXNODES_OT_ai_scene_plan,
     FXNODES_OT_ai_chat_generate,

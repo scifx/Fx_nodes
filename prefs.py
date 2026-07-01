@@ -45,6 +45,11 @@ class FxPreferences(AddonPreferences):
     ai_model: StringProperty(name="Default Model", default="gpt-4o-mini")
 
     allow_ai: BoolProperty(name="Enable AI Nodes", default=True)
+    allow_full_python: BoolProperty(
+        name="Allow Full Python Function",
+        default=True,
+        description="允许 Function 节点执行任意 Python 代码 (如关掉则跳过执行)",
+    )
     confirm_ai_scene: BoolProperty(name="Confirm before AI scene edits", default=True)
 
     def draw(self, context):
@@ -57,6 +62,7 @@ class FxPreferences(AddonPreferences):
         row = box.row()
         row.operator("fx_nodes.test_ai", icon="PLUGIN")
         box2 = layout.box()
-        box2.label(text="Safety", icon="LOCKED")
+        box2.label(text="Safety Controls", icon="LOCKED")
         box2.prop(self, "allow_ai")
+        box2.prop(self, "allow_full_python")
         box2.prop(self, "confirm_ai_scene")

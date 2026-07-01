@@ -30,7 +30,7 @@ class FxBaseNode(Node):
     """Common base for all Fx nodes."""
     # subclasses set these
     category = "Utility"
-    fx_color = (0.3, 0.3, 0.35)
+    fx_color = (0.25, 0.25, 0.28)
 
     # runtime fields (not bpy props): set on instances
     @property
@@ -241,23 +241,69 @@ class FxBaseNode(Node):
         """Override: handle a flow signal, return [(out_socket, signal), ...]."""
         return []
 
-    # ---- drawing ---------------------------------------------------------
+    # ---- drawing & text datablock helpers --------------------------------
+    def draw_text_row(self, layout, text_prop_name, fallback_prop_name, label="Text", prefix="Fx Text"):
+        """Draw an Animation Nodes style Text datablock picker row with create and edit buttons."""
+        row = layout.row(align=True)
+        if _HAS_BPY and hasattr(bpy, "data"):
+            row.prop_search(self, text_prop_name, bpy.data, "texts", text=label)
+        else:
+            row.prop(self, text_prop_name, text=label)
+        op = row.operator("fx_nodes.node_new_text", text="", icon="ADD")
+        op.node_name = self.name
+        op.tree_name = self.id_data.name
+        op.prop_name = text_prop_name
+        op.fallback_prop = fallback_prop_name
+        op.prefix = prefix
+        text_val = getattr(self, text_prop_name, "")
+        op = row.operator("fx_nodes.open_text_editor", text="", icon="TEXT")
+        op.text_name = text_val
+        if not text_val and hasattr(self, fallback_prop_name):
+            layout.prop(self, fallback_prop_name, text=label if label != "Text" else "Inline")
+
+    def get_text_content(self, text_prop_name, fallback_prop_name):
+        """Retrieve multi-line code/prompt from Text datablock or fallback string property."""
+        text_name = getattr(self, text_prop_name, "")
+        if _HAS_BPY and hasattr(bpy, "data") and text_name:
+            txt = bpy.data.texts.get(text_name)
+            if txt is not None:
+                try:
+                    content = txt.as_string()
+                    if content and content.strip():
+                        return content
+                except Exception:
+                    pass
+        return getattr(self, fallback_prop_name, "") or ""
+
     def draw_buttons(self, context, layout):
         self.ensure_flow_sockets_top()
+        # 1. Controls section (inputs, buttons, toggles, selectors)
         self.draw_body(context, layout)
+        # 2. Previews section (all preview/status output strictly AFTER buttons)
+        self.draw_previews(context, layout)
+        # 3. Error / Warning display
         err = getattr(self, "_error", "")
         if err:
             box = layout.box()
             box.alert = True
-            box.label(text=err[:60], icon="ERROR")
+            header = box.row(align=True)
+            header.label(text="Error Summary", icon="ERROR")
+            lines = str(err).splitlines()
+            for line in lines[:6]:
+                box.label(text=line[:120])
+            if len(lines) > 6:
+                box.label(text=f"… +{len(lines) - 6} more line(s)")
 
     def draw_body(self, context, layout):
+        pass
+
+    def draw_previews(self, context, layout):
         pass
 
 
 class FxTriggerNode(FxBaseNode):
     category = "Trigger"
-    fx_color = (0.35, 0.18, 0.18)
+    fx_color = (0.48, 0.18, 0.18)
 
     def init_sockets(self):
         self.add_out_flow()
@@ -269,9 +315,9 @@ class FxTriggerNode(FxBaseNode):
 
 class FxLogicNode(FxBaseNode):
     category = "Logic"
-    fx_color = (0.18, 0.28, 0.35)
+    fx_color = (0.16, 0.30, 0.48)
 
 
 class FxActionNode(FxBaseNode):
-    category = "Action"
-    fx_color = (0.18, 0.32, 0.2)
+    category = "Property"
+    fx_color = (0.16, 0.40, 0.26)

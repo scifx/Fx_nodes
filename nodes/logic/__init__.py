@@ -30,6 +30,8 @@ class FunctionNode(FxLogicNode):
     bl_idname = "FxFunction"
     bl_label = "Function"
     bl_icon = "SCRIPT"
+    category = "Script"
+    fx_color = (0.22, 0.35, 0.52)
 
     code: StringProperty(
         name="Python Code",
@@ -46,6 +48,15 @@ class FunctionNode(FxLogicNode):
     def init_sockets(self):
         self.add_in_flow(); self.add_out_flow()
 
+    def warn(self, msg):
+        self["_warn"] = str(msg)
+
+    def error(self, msg):
+        self._error = str(msg)
+
+    def status(self, msg):
+        self.last_result = str(msg)
+
     def _code_text(self):
         if bpy is None or not self.code_text_name:
             return None
@@ -56,8 +67,6 @@ class FunctionNode(FxLogicNode):
         if txt is not None:
             try:
                 code = txt.as_string()
-                # Fall back to inline code if Text block is empty – prevents
-                # "empty text masks valid code" bug, same as AI Scene Script fix.
                 if code and code.strip():
                     return code
             except Exception:
@@ -65,32 +74,41 @@ class FunctionNode(FxLogicNode):
         return self.code or "return msg"
 
     def draw_body(self, context, layout):
-        row = layout.row(align=True)
-        if bpy is not None:
-            row.prop_search(self, "code_text_name", bpy.data, "texts", text="Code")
-        else:
-            row.prop(self, "code_text_name", text="Code")
-        op = row.operator("fx_nodes.function_new_text", text="", icon="ADD")
-        op.node_name = self.name
-        op.tree_name = self.id_data.name
-        op = row.operator("fx_nodes.open_text_editor", text="", icon="TEXT")
-        op.text_name = self.code_text_name
+        from ...prefs import get_preferences
+        try:
+            prefs = get_preferences(context)
+            allowed = prefs.allow_full_python if prefs else True
+        except Exception:
+            allowed = True
+        if not allowed:
+            box = layout.box()
+            box.alert = True
+            box.label(text="Full Python Disabled in Prefs", icon="LOCKED")
+        self.draw_text_row(layout, "code_text_name", "code", label="Code", prefix="Fx Function")
 
+    def draw_previews(self, context, layout):
         code = self.get_code()
         preview = [ln.rstrip() for ln in code.splitlines()[:4]]
         if preview:
-            box = layout.box(); box.scale_y = 0.72
+            box = layout.box(); box.scale_y = 0.8
+            box.label(text="Code Preview:", icon="SCRIPT")
             for ln in preview:
-                box.label(text=(ln or " ")[:80], icon="SCRIPT")
+                box.label(text=(ln or " ")[:80])
             extra = len(code.splitlines()) - len(preview)
             if extra > 0:
                 box.label(text=f"… +{extra} more lines")
-        if not self.code_text_name:
-            layout.prop(self, "code", text="Fallback")
         if self.last_result:
-            layout.label(text=self.last_result[:60], icon="CHECKMARK")
+            box = layout.box(); box.scale_y = 0.8
+            box.label(text=f"Status: {self.last_result[:60]}", icon="CHECKMARK")
 
     def _call_user_code(self, signal, engine):
+        from ...prefs import get_preferences
+        try:
+            prefs = get_preferences()
+            if prefs and not prefs.allow_full_python:
+                raise PermissionError("Full Python Execution is disabled in preferences (Safety).")
+        except KeyError:
+            pass
         code = self.get_code()
         body = textwrap.indent(code or "return msg", "    ")
         src = "def _fx_user_function(msg, context, flow, global_context, node, engine):\n" + body
@@ -114,7 +132,14 @@ class FunctionNode(FxLogicNode):
         try:
             result = self._call_user_code(signal, engine)
         except Exception as e:
-            self._error = f"{type(e).__name__}: {e}"
+            import traceback
+            tb_list = traceback.extract_tb(e.__traceback__)
+            line_str = ""
+            for frame in reversed(tb_list):
+                if frame.name == "_fx_user_function" or "<string>" in frame.filename:
+                    line_str = f"Line {max(1, frame.lineno - 1)}: "
+                    break
+            self._error = f"{line_str}{type(e).__name__}: {e}"
             return []
         self._error = ""
         if result is None:
@@ -144,11 +169,18 @@ class ExpressionNode(FxLogicNode):
     bl_idname = "FxExpression"
     bl_label = "Expression"
     bl_icon = "DRIVER"
+    category = "Script"
+    fx_color = (0.22, 0.35, 0.52)
 
     expression: StringProperty(
         name="Expr",
         default="payload",
         description="安全表达式；可用 msg/payload/topic/flow/Global/G/global_context/frame/time",
+    )
+    expr_text_name: StringProperty(
+        name="Expr Text",
+        default="",
+        description="Optional Blender Text datablock for multi-line expression.",
     )
     out_path: StringProperty(name="Target", default="payload")
     live_value: StringProperty(name="Last", default="")
@@ -156,16 +188,30 @@ class ExpressionNode(FxLogicNode):
     def init_sockets(self):
         self.add_in_flow(); self.add_out_flow()
 
+    def get_expression(self):
+        return self.get_text_content("expr_text_name", "expression")
+
     def draw_body(self, context, layout):
-        layout.prop(self, "expression", text="")
+        self.draw_text_row(layout, "expr_text_name", "expression", label="Expr", prefix="Fx Expr")
         layout.prop(self, "out_path")
+
+    def draw_previews(self, context, layout):
+        expr_str = self.get_expression()
+        if getattr(self, "expr_text_name", "") and expr_str:
+            box = layout.box(); box.scale_y = 0.8
+            box.label(text="Expr Preview:", icon="DRIVER")
+            for ln in expr_str.splitlines()[:4]:
+                box.label(text=(ln or " ")[:80])
+            if len(expr_str.splitlines()) > 4:
+                box.label(text=f"… +{len(expr_str.splitlines()) - 4} more lines")
         if self.live_value:
-            layout.label(text=f"{self.out_path} = {self.live_value}", icon="CHECKMARK")
+            box = layout.box(); box.scale_y = 0.8
+            box.label(text=f"→ {self.out_path} = {self.live_value}", icon="CHECKMARK")
 
     def process(self, signal, engine):
         from ...core import msgpath
         try:
-            val = expr.evaluate(self.expression, self.expr_vars(signal, engine))
+            val = expr.evaluate(self.get_expression(), self.expr_vars(signal, engine))
             msgpath.set(self.out_path, val, signal.msg, self.flow_context(engine), self.global_context(engine))
         except (expr.ExprError, msgpath.MsgPathError) as e:
             self._error = str(e)

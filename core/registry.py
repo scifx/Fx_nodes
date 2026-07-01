@@ -18,7 +18,7 @@ SOCKET_CLASSES: Dict[str, type] = {}
 CATEGORIES: Dict[str, List[str]] = {}
 
 # fixed display order of categories in the add menu
-CATEGORY_ORDER = ["Trigger", "Logic", "Action", "Data", "AI", "Utility"]
+CATEGORY_ORDER = ["Trigger", "Property", "Logic", "Script", "Data", "Debug", "AI", "Utility"]
 
 
 def register_node(cls: Type) -> Type:

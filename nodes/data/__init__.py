@@ -25,8 +25,8 @@ class DebugNode(FxBaseNode):
     bl_idname = "FxDebug"
     bl_label = "Debug"
     bl_icon = "VIEWZOOM"
-    category = "Data"
-    fx_color = (0.32, 0.28, 0.12)
+    category = "Debug"
+    fx_color = (0.45, 0.32, 0.14)
 
     path: StringProperty(name="Path", default="msg")
     max_rows: IntProperty(name="Max Rows", default=8, min=1, max=64)
@@ -48,25 +48,6 @@ class DebugNode(FxBaseNode):
 
     def draw_body(self, context, layout):
         layout.prop(self, "path")
-        row = layout.row(align=True)
-        row.label(text=f"Fires: {self.fire_count}", icon="DRIVER")
-        row.prop(self, "max_rows", text="Rows")
-
-        raw = self.get("_preview", "{}")
-        try:
-            data = json.loads(raw)
-        except Exception:
-            data = {}
-        lines = self._preview_lines(data)
-        box = layout.box()
-        if lines:
-            for line in lines[:self.max_rows]:
-                box.label(text=line[:120])
-            if len(lines) > self.max_rows:
-                box.label(text=f"… +{len(lines) - self.max_rows} more lines")
-        else:
-            box.label(text="(no data yet)", icon="INFO")
-
         layout.prop(self, "show_context")
         layout.prop(self, "log_to_text")
         if self.log_to_text:
@@ -77,6 +58,41 @@ class DebugNode(FxBaseNode):
                 row.prop(self, "debug_text_name", text="Log")
             op = row.operator("fx_nodes.open_text_editor", text="", icon="TEXT")
             op.text_name = self.debug_text_name
+
+        row = layout.row(align=True)
+        row.label(text=f"Fires: {self.fire_count}", icon="DRIVER")
+        row.prop(self, "max_rows", text="Rows")
+
+        row = layout.row(align=True)
+        op = row.operator("fx_nodes.debug_clear_node", text="Clear", icon="TRASH")
+        op.tree_name = self.id_data.name
+        op.node_name = self.name
+        op = row.operator("fx_nodes.debug_copy_json", text="Copy JSON", icon="COPYDOWN")
+        op.tree_name = self.id_data.name
+        op.node_name = self.name
+
+    def draw_previews(self, context, layout):
+        raw = self.get("_preview", "{}")
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data = {}
+        lines = self._preview_lines(data)
+        box = layout.box()
+        header = box.row(align=True)
+        type_str = type(data).__name__
+        if isinstance(data, dict):
+            type_str = f"dict [{len(data)} keys]"
+        elif isinstance(data, list):
+            type_str = f"list [{len(data)} items]"
+        header.label(text=f"Preview ({type_str}):", icon="VIEWZOOM")
+        if lines:
+            for line in lines[:self.max_rows]:
+                box.label(text=line[:120])
+            if len(lines) > self.max_rows:
+                box.label(text=f"… +{len(lines) - self.max_rows} more lines")
+        else:
+            box.label(text="(no data yet)", icon="INFO")
 
     def _pretty(self, value):
         try:
@@ -159,7 +175,7 @@ class ChangeNode(FxBaseNode):
     bl_label = "Change"
     bl_icon = "RNA"
     category = "Data"
-    fx_color = (0.24, 0.30, 0.16)
+    fx_color = (0.15, 0.36, 0.40)
 
     mode: EnumProperty(name="Mode", items=[
         ("SET", "Set", "Set a msg/flow/global property"),
@@ -168,28 +184,46 @@ class ChangeNode(FxBaseNode):
     ], default="SET")
     path: StringProperty(name="Property", default="payload")
     value_expr: StringProperty(name="Value Expr", default="payload")
+    value_text_name: StringProperty(
+        name="Value Text",
+        default="",
+        description="Optional Blender Text datablock for multiline Value Expr.",
+    )
     to_path: StringProperty(name="To", default="payload")
     last_value: StringProperty(name="Last", default="")
 
     def init_sockets(self):
         self.add_in_flow(); self.add_out_flow()
 
+    def get_value_expr(self):
+        return self.get_text_content("value_text_name", "value_expr")
+
     def draw_body(self, context, layout):
         layout.prop(self, "mode", text="")
         layout.prop(self, "path")
         if self.mode == "SET":
-            layout.prop(self, "value_expr")
+            self.draw_text_row(layout, "value_text_name", "value_expr", label="Expr", prefix="Fx Change Value")
         elif self.mode == "MOVE":
             layout.prop(self, "to_path")
+
+    def draw_previews(self, context, layout):
+        if self.mode == "SET" and getattr(self, "value_text_name", ""):
+            expr_str = self.get_value_expr()
+            if expr_str:
+                box = layout.box(); box.scale_y = 0.8
+                box.label(text="Value Expr Preview:", icon="DRIVER")
+                for ln in expr_str.splitlines()[:3]:
+                    box.label(text=(ln or " ")[:80])
         if self.last_value:
-            layout.label(text=self.last_value[:60], icon="CHECKMARK")
+            box = layout.box(); box.scale_y = 0.8
+            box.label(text=self.last_value[:60], icon="CHECKMARK")
 
     def process(self, signal, engine):
         flow = self.flow_context(engine)
         glob = self.global_context(engine)
         try:
             if self.mode == "SET":
-                val = expr.evaluate(self.value_expr, self.expr_vars(signal, engine))
+                val = expr.evaluate(self.get_value_expr(), self.expr_vars(signal, engine))
                 msgpath.set(self.path, val, signal.msg, flow, glob)
                 self.last_value = f"{self.path} = {msgpath.compact(val, 40)}"
             elif self.mode == "DELETE":
@@ -218,7 +252,7 @@ class ContextNode(FxBaseNode):
     bl_label = "Context"
     bl_icon = "WORLD"
     category = "Data"
-    fx_color = (0.22, 0.24, 0.34)
+    fx_color = (0.15, 0.36, 0.40)
 
     mode: EnumProperty(name="Mode", items=[
         ("FLOW_TO_MSG", "Flow → Msg", "Read flow context into msg"),
@@ -231,19 +265,30 @@ class ContextNode(FxBaseNode):
     context_key: StringProperty(name="Context Key", default="value")
     msg_path: StringProperty(name="Message Property", default="payload")
     value_expr: StringProperty(name="Value Expr", default="payload")
+    value_text_name: StringProperty(
+        name="Value Text",
+        default="",
+        description="Optional Blender Text datablock for multiline Value Expr.",
+    )
     last_value: StringProperty(name="Last", default="")
 
     def init_sockets(self):
         self.add_in_flow(); self.add_out_flow()
+
+    def get_value_expr(self):
+        return self.get_text_content("value_text_name", "value_expr")
 
     def draw_body(self, context, layout):
         layout.prop(self, "mode", text="")
         layout.prop(self, "context_key")
         layout.prop(self, "msg_path")
         if self.mode in {"MSG_TO_FLOW", "MSG_TO_GLOBAL", "MSG_TO_RUNTIME"}:
-            layout.prop(self, "value_expr")
+            self.draw_text_row(layout, "value_text_name", "value_expr", label="Expr", prefix="Fx Context")
+
+    def draw_previews(self, context, layout):
         if self.last_value:
-            layout.label(text=self.last_value[:60], icon="CHECKMARK")
+            box = layout.box(); box.scale_y = 0.8
+            box.label(text=self.last_value[:60], icon="CHECKMARK")
 
     def _ctx_path(self, root, key):
         """Return a msgpath-compatible path for a context key.
@@ -314,13 +359,13 @@ class ContextNode(FxBaseNode):
                 val = self._runtime_get(signal, self.context_key)
                 msgpath.set(self.msg_path, val, signal.msg, flow, glob)
             elif self.mode == "MSG_TO_FLOW":
-                val = expr.evaluate(self.value_expr, self.expr_vars(signal, engine))
+                val = expr.evaluate(self.get_value_expr(), self.expr_vars(signal, engine))
                 self._context_set("flow", self.context_key, val, signal, flow, glob)
             elif self.mode == "MSG_TO_GLOBAL":
-                val = expr.evaluate(self.value_expr, self.expr_vars(signal, engine))
+                val = expr.evaluate(self.get_value_expr(), self.expr_vars(signal, engine))
                 self._context_set("global", self.context_key, val, signal, flow, glob)
             elif self.mode == "MSG_TO_RUNTIME":
-                val = expr.evaluate(self.value_expr, self.expr_vars(signal, engine))
+                val = expr.evaluate(self.get_value_expr(), self.expr_vars(signal, engine))
                 self._runtime_set(signal, self.context_key, val)
             self.last_value = msgpath.compact(val, 50)
         except (expr.ExprError, msgpath.MsgPathError) as e:
@@ -337,7 +382,7 @@ class CacheNode(FxBaseNode):
     bl_label = "Cache"
     bl_icon = "FILE_CACHE"
     category = "Data"
-    fx_color = (0.20, 0.30, 0.34)
+    fx_color = (0.15, 0.36, 0.40)
 
     source_path: StringProperty(
         name="Source",
@@ -445,6 +490,7 @@ class CacheNode(FxBaseNode):
         op.tree_name = self.id_data.name
         op.node_name = self.name
 
+    def draw_previews(self, context, layout):
         raw = self.get("_preview", "{}")
         try:
             data = json.loads(raw)
@@ -452,9 +498,11 @@ class CacheNode(FxBaseNode):
             data = {}
         lines = self._preview_lines(data)
         box = layout.box()
+        header = box.row(align=True)
+        header.label(text=f"Cache Preview ({len(lines)} lines):", icon="FILE_CACHE")
         if lines:
             for line in lines[:self.max_rows]:
-                box.label(text=line[:120], icon="FILE_CACHE")
+                box.label(text=line[:120])
             if len(lines) > self.max_rows:
                 box.label(text=f"… +{len(lines) - self.max_rows} more lines")
         else:
@@ -503,8 +551,8 @@ class PropertyGetNode(FxBaseNode):
     bl_idname = "FxPropertyGet"
     bl_label = "Get Property"
     bl_icon = "RNA"
-    category = "Data"
-    fx_color = (0.24, 0.30, 0.16)
+    category = "Property"
+    fx_color = (0.16, 0.40, 0.26)
 
     path: StringProperty(name="Blender Full Path", default="")
     out_path: StringProperty(name="Target", default="payload")
@@ -516,8 +564,11 @@ class PropertyGetNode(FxBaseNode):
     def draw_body(self, context, layout):
         layout.prop(self, "path", text="")
         layout.prop(self, "out_path")
+
+    def draw_previews(self, context, layout):
         if self.last_value:
-            layout.label(text=f"→ {self.last_value}", icon="CHECKMARK")
+            box = layout.box(); box.scale_y = 0.8
+            box.label(text=f"→ {self.last_value}", icon="CHECKMARK")
 
     def process(self, signal, engine):
         flow = self.flow_context(engine)

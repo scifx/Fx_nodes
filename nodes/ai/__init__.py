@@ -158,7 +158,7 @@ def _extract_expression(text: str) -> str:
 
 class _AIBase(FxBaseNode):
     category = "AI"
-    fx_color = (0.32, 0.12, 0.34)
+    fx_color = (0.40, 0.18, 0.46)
 
     base_url_override: StringProperty(name="Base URL", default="")
     model_override: StringProperty(name="Model", default="")
@@ -205,7 +205,17 @@ class AIChatNode(_AIBase):
     bl_icon = "OUTLINER_OB_LIGHT"
 
     system: StringProperty(name="System", default="You are a helpful assistant inside Blender.")
+    system_text_name: StringProperty(
+        name="System Text",
+        default="",
+        description="Optional Blender Text datablock for multi-line system prompt.",
+    )
     prompt: StringProperty(name="Prompt", default="Describe a procedural city in one sentence.")
+    prompt_text_name: StringProperty(
+        name="Prompt Text",
+        default="",
+        description="Optional Blender Text datablock for multi-line user prompt.",
+    )
     out_key: StringProperty(
         name="Target",
         default="payload",
@@ -220,8 +230,15 @@ class AIChatNode(_AIBase):
     def init_sockets(self):
         self.add_in_flow(); self.add_out_flow()
 
+    def get_system(self):
+        return self.get_text_content("system_text_name", "system")
+
+    def get_prompt(self):
+        return self.get_text_content("prompt_text_name", "prompt")
+
     def draw_body(self, context, layout):
-        layout.prop(self, "prompt", text="")
+        self.draw_text_row(layout, "system_text_name", "system", label="Sys", prefix="Fx AI System")
+        self.draw_text_row(layout, "prompt_text_name", "prompt", label="Prompt", prefix="Fx AI Prompt")
         row = layout.row(align=True)
         op = row.operator("fx_nodes.ai_chat_generate", text="Generate", icon="FILE_REFRESH")
         op.node_name = self.name
@@ -236,17 +253,21 @@ class AIChatNode(_AIBase):
         col = layout.column(align=True)
         col.prop(self, "model_override", text="model")
         col.prop(self, "temperature")
+
+    def draw_previews(self, context, layout):
         if self.last_result:
-            box = layout.box(); box.scale_y = 0.7
-            box.label(text=self.last_result[:120], icon="CHECKMARK")
+            box = layout.box(); box.scale_y = 0.8
+            box.label(text="AI Response Preview:", icon="CHECKMARK")
+            for line in self.last_result.splitlines()[:6]:
+                box.label(text=line[:120])
 
     def process(self, signal, engine):
         if not self.generate_on_flow:
             self._error = "运行时 AI 生成默认关闭；如需流程触发，请开启 Generate On Flow"
             return []
-        user_prompt = _inject_reference_context(self, engine, signal, _template(self.prompt, signal))
+        user_prompt = _inject_reference_context(self, engine, signal, _template(self.get_prompt(), signal))
         msgs = [
-            {"role": "system", "content": self.system},
+            {"role": "system", "content": self.get_system()},
             {"role": "user", "content": user_prompt},
         ]
         self["_last_messages"] = json.dumps(msgs, ensure_ascii=False)
@@ -287,6 +308,11 @@ class AIExpressionNode(_AIBase):
         default="double the current payload",
         description="Natural-language description. May use {payload}, {topic}, or other msg/context template keys.",
     )
+    ask_text_name: StringProperty(
+        name="Describe Text",
+        default="",
+        description="Optional Blender Text datablock for natural-language request.",
+    )
     generated: StringProperty(name="Expression", default="")
     out_key: StringProperty(
         name="Target",
@@ -320,19 +346,26 @@ class AIExpressionNode(_AIBase):
     def init_sockets(self):
         self.add_in_flow(); self.add_out_flow()
 
+    def get_ask(self):
+        return self.get_text_content("ask_text_name", "ask")
+
     def draw_body(self, context, layout):
-        layout.prop(self, "ask", text="")
+        self.draw_text_row(layout, "ask_text_name", "ask", label="Ask", prefix="Fx AI Ask")
         row = layout.row(align=True)
         row.operator("fx_nodes.ai_generate_expr", text="Generate", icon="SHADERFX").node_name = self.name
         row.prop(self, "auto_generate", text="On Flow")
-        if self.generated:
-            box = layout.box()
-            box.label(text=self.generated[:96], icon="SCRIPT")
         layout.prop(self, "out_key")
         self.draw_reference_ui(layout)
         col = layout.column(align=True)
         col.prop(self, "model_override", text="model")
         col.prop(self, "temperature")
+
+    def draw_previews(self, context, layout):
+        if self.generated:
+            box = layout.box(); box.scale_y = 0.8
+            box.label(text="Generated Expr:", icon="SCRIPT")
+            for ln in self.generated.splitlines()[:4]:
+                box.label(text=ln[:100])
 
     def validate_and_store(self, text):
         try:
@@ -356,7 +389,7 @@ class AIExpressionNode(_AIBase):
         # This matches AIChatNode behavior and allows chaining AI nodes with Cache.
         # If Auto Generate is OFF, use cached expression for fast local evaluation.
         if self.auto_generate:
-            user_prompt = _inject_reference_context(self, engine, signal, _template(self.ask, signal))
+            user_prompt = _inject_reference_context(self, engine, signal, _template(self.get_ask(), signal))
             msgs = [
                 {"role": "system", "content": self.SYS},
                 {"role": "user", "content": user_prompt},
@@ -405,6 +438,11 @@ class AISceneCommandNode(_AIBase):
     bl_icon = "OUTLINER_OB_GROUP_INSTANCE"
 
     ask: StringProperty(name="Instruction", default="create 5 cubes in a row")
+    ask_text_name: StringProperty(
+        name="Instruction Text",
+        default="",
+        description="Optional Blender Text datablock for multi-line instruction prompt.",
+    )
     # Backwards-compatible fallback storage.  Older files used ``plan``.
     plan: StringProperty(default="")
     script_text_name: StringProperty(
@@ -451,6 +489,9 @@ class AISceneCommandNode(_AIBase):
 
     def init_sockets(self):
         self.add_in_flow(); self.add_out_flow()
+
+    def get_ask(self):
+        return self.get_text_content("ask_text_name", "ask")
 
     def _strip_script(self, text):
         t = _strip_code_fence(text)
@@ -513,7 +554,7 @@ class AISceneCommandNode(_AIBase):
         return self.set_script_text(text)
 
     def draw_body(self, context, layout):
-        layout.prop(self, "ask", text="")
+        self.draw_text_row(layout, "ask_text_name", "ask", label="Instruction", prefix="Fx Scene Ask")
         # Generate + Run row
         row = layout.row(align=True)
         op = row.operator("fx_nodes.ai_scene_plan", text="Generate", icon="FILE_REFRESH")
@@ -524,29 +565,14 @@ class AISceneCommandNode(_AIBase):
             run_op = row.operator("fx_nodes.fire_node", text="Run", icon="PLAY")
             run_op.tree_name = tree.name
             run_op.node_name = self.name
-        # Text datablock picker
+        # Text datablock picker for script output
         row2 = layout.row(align=True)
         if bpy is not None:
-            row2.prop_search(self, "script_text_name", bpy.data, "texts", text="")
+            row2.prop_search(self, "script_text_name", bpy.data, "texts", text="Script Out")
         else:
-            row2.prop(self, "script_text_name", text="")
+            row2.prop(self, "script_text_name", text="Script Out")
         op = row2.operator("fx_nodes.open_text_editor", text="", icon="TEXT")
         op.text_name = self.script_text_name
-
-        script = self.get_script()
-        if script:
-            box = layout.box(); box.scale_y = 0.72
-            lines = script.splitlines()
-            try:
-                compile(script, f"<Fx AI Scene Script {self.name}>", "exec")
-                box.label(text=f"Python script · {len(lines)} line(s)", icon="CHECKMARK")
-            except SyntaxError as e:
-                box.alert = True
-                box.label(text=f"Syntax line {e.lineno}: {e.msg}"[:96], icon="ERROR")
-            for line in lines[:7]:
-                box.label(text=(line or " ")[:110], icon="SCRIPT")
-            if len(lines) > 7:
-                box.label(text=f"… +{len(lines) - 7} more lines")
 
         layout.prop(self, "auto_generate_on_flow")
         layout.prop(self, "execute_script")
@@ -556,6 +582,22 @@ class AISceneCommandNode(_AIBase):
         col = layout.column(align=True)
         col.prop(self, "model_override", text="model")
         col.prop(self, "temperature")
+
+    def draw_previews(self, context, layout):
+        script = self.get_script()
+        if script:
+            box = layout.box(); box.scale_y = 0.8
+            lines = script.splitlines()
+            try:
+                compile(script, f"<Fx AI Scene Script {self.name}>", "exec")
+                box.label(text=f"Script Preview ({len(lines)} lines):", icon="CHECKMARK")
+            except SyntaxError as e:
+                box.alert = True
+                box.label(text=f"Syntax line {e.lineno}: {e.msg}"[:96], icon="ERROR")
+            for line in lines[:7]:
+                box.label(text=(line or " ")[:110], icon="SCRIPT")
+            if len(lines) > 7:
+                box.label(text=f"… +{len(lines) - 7} more lines")
 
     def _execute_script(self, script, signal, engine):
         msg = signal.msg

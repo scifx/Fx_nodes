@@ -8,8 +8,16 @@ import sys
 import types
 import unittest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, ROOT)
+PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PARENT_DIR = os.path.dirname(PKG_DIR)
+if PARENT_DIR not in sys.path:
+    sys.path.insert(0, PARENT_DIR)
+if os.path.basename(PKG_DIR) != "Fx_nodes":
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("Fx_nodes", os.path.join(PKG_DIR, "__init__.py"), submodule_search_locations=[PKG_DIR])
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["Fx_nodes"] = mod
+    spec.loader.exec_module(mod)
 
 
 def install_bpy_mock():
@@ -92,7 +100,7 @@ class TestIntegration(unittest.TestCase):
 
     def test_categories_complete(self):
         cats = self.registry.ordered_categories()
-        for c in ["Trigger", "Logic", "Action", "Data", "AI"]:
+        for c in ["Trigger", "Property", "Logic", "Script", "Data", "Debug", "AI"]:
             self.assertIn(c, cats)
 
     def test_action_layer_is_property_first(self):
@@ -261,14 +269,35 @@ class TestIntegration(unittest.TestCase):
         p = make_provider("openai-compat", base_url="http://x/v1", api_key="k", model="m")
         self.assertEqual(p.model, "m")
 
-    def test_debug_panel_is_dedicated_tab(self):
-        from Fx_nodes.ui.panels import FXNODES_PT_debug_console
-        self.assertEqual(FXNODES_PT_debug_console.bl_category, "Fx Debug")
+    def test_ui_panels_registered(self):
+        from Fx_nodes.ui.panels import CLASSES, FXNODES_PT_engine, FXNODES_PT_ai
+        self.assertIn(FXNODES_PT_engine, CLASSES)
+        self.assertIn(FXNODES_PT_ai, CLASSES)
 
     def test_register_unregister_runs(self):
         # should not raise with mocked bpy.utils
         self.addon.register()
         self.addon.unregister()
+
+    def test_multiline_text_datablocks_and_previews(self):
+        from Fx_nodes.nodes.logic import ExpressionNode
+        node = ExpressionNode.__new__(ExpressionNode)
+        node.expression = "10 + 20"
+        node.expr_text_name = ""
+        self.assertEqual(node.get_expression(), "10 + 20")
+        # test that draw_body and draw_previews exist separately
+        self.assertTrue(hasattr(node, "draw_body"))
+        self.assertTrue(hasattr(node, "draw_previews"))
+
+    def test_dynamic_timer_trigger_updates(self):
+        from Fx_nodes.core.runtime import RUNTIME
+        from Fx_nodes.nodes.triggers import TimerTriggerNode
+        node = TimerTriggerNode.__new__(TimerTriggerNode)
+        node.interval = 0.5
+        node.enabled = True
+        self.assertEqual(node.event_source(), {"kind": "timer", "interval": 0.5, "enabled": True})
+        self.assertTrue(hasattr(RUNTIME, "_timer_last_fire"))
+        self.assertTrue(hasattr(RUNTIME, "_tag_redraw_ui"))
 
 
 if __name__ == "__main__":
