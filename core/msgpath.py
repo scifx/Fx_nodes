@@ -8,19 +8,21 @@ Supported examples:
     msg.user.name
     msg.items[0].name
     flow.counter
-    global.settings.seed
+    Global.settings.seed
 
 This is intentionally small and predictable: dotted names plus integer or
-quoted-string brackets.
+quoted-string brackets.  ``set()`` creates intermediate dict/list containers so
+paths like ``payload.items[0].name`` work from an empty message.
 """
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable, Tuple
+from typing import Any, Tuple
 
 
 class MsgPathError(Exception):
     pass
+
 
 _TOKEN_RE = re.compile(r"""
     (?P<name>[A-Za-z_][A-Za-z0-9_]*)
@@ -33,24 +35,26 @@ def _split_root(path: str) -> Tuple[str, str]:
     p = (path or "").strip()
     if not p:
         raise MsgPathError("path is empty")
-    if p.startswith("msg."):
-        return "msg", p[4:]
-    if p.startswith("msg["):
-        return "msg", p[3:]
-    if p == "msg":
-        return "msg", ""
-    if p.startswith("flow."):
-        return "flow", p[5:]
-    if p.startswith("flow["):
-        return "flow", p[4:]
-    if p == "flow":
-        return "flow", ""
-    if p.startswith("global."):
-        return "global", p[7:]
-    if p.startswith("global["):
-        return "global", p[6:]
-    if p == "global":
-        return "global", ""
+
+    def root_alias(alias: str, root: str):
+        if p == alias:
+            return root, ""
+        if p.startswith(alias + "."):
+            return root, p[len(alias) + 1:]
+        if p.startswith(alias + "["):
+            return root, p[len(alias):]
+        return None
+
+    # Accept UI/legacy spellings too: Global.test, Global["test"], G.test.
+    for alias, root in (
+        ("msg", "msg"), ("Msg", "msg"),
+        ("flow", "flow"), ("Flow", "flow"),
+        ("global", "global"), ("Global", "global"), ("G", "global"),
+    ):
+        hit = root_alias(alias, root)
+        if hit is not None:
+            return hit
+
     # Node-RED's UI often lets users say just payload/topic for msg paths.
     return "msg", p
 
@@ -93,6 +97,25 @@ def _container(root: str, msg: dict, flow: dict | None = None, global_context: d
     raise MsgPathError(f"unknown root: {root}")
 
 
+def _list_index(seq: list, idx: int, *, create: bool = False) -> int:
+    if not isinstance(idx, int):
+        raise MsgPathError("list index must be an integer")
+    if idx < 0:
+        idx = len(seq) + idx
+    if idx < 0:
+        raise MsgPathError("list index out of range")
+    if create:
+        while len(seq) <= idx:
+            seq.append(None)
+    elif idx >= len(seq):
+        raise IndexError(idx)
+    return idx
+
+
+def _new_container(next_token: Any):
+    return [] if isinstance(next_token, int) else {}
+
+
 def get(path: str, msg: dict, flow: dict | None = None, global_context: dict | None = None, default: Any = None) -> Any:
     root, toks = parse(path)
     cur = _container(root, msg, flow, global_context)
@@ -100,7 +123,10 @@ def get(path: str, msg: dict, flow: dict | None = None, global_context: dict | N
         return cur
     try:
         for t in toks:
-            cur = cur[t]
+            if isinstance(cur, list):
+                cur = cur[_list_index(cur, t)]
+            else:
+                cur = cur[t]
         return cur
     except Exception:
         return default
@@ -111,15 +137,32 @@ def set(path: str, value: Any, msg: dict, flow: dict | None = None, global_conte
     if not toks:
         raise MsgPathError("cannot replace root object")
     cur = _container(root, msg, flow, global_context)
-    for t, nxt in zip(toks[:-1], toks[1:]):
+    for i, t in enumerate(toks[:-1]):
+        nxt = toks[i + 1]
         if isinstance(cur, list):
+            idx = _list_index(cur, t, create=True)
+            if cur[idx] is None:
+                cur[idx] = _new_container(nxt)
+            elif not isinstance(cur[idx], (dict, list)):
+                raise MsgPathError(f"cannot descend into non-container at {t!r}")
+            cur = cur[idx]
+        elif isinstance(cur, dict):
+            if t not in cur or cur[t] is None:
+                cur[t] = _new_container(nxt)
+            elif not isinstance(cur[t], (dict, list)):
+                raise MsgPathError(f"cannot descend into non-container at {t!r}")
             cur = cur[t]
-            continue
-        if t not in cur or cur[t] is None:
-            cur[t] = [] if isinstance(nxt, int) else {}
-        cur = cur[t]
+        else:
+            raise MsgPathError(f"cannot descend into {type(cur).__name__}")
+
     last = toks[-1]
-    cur[last] = value
+    if isinstance(cur, list):
+        idx = _list_index(cur, last, create=True)
+        cur[idx] = value
+    elif isinstance(cur, dict):
+        cur[last] = value
+    else:
+        raise MsgPathError(f"cannot set value on {type(cur).__name__}")
     return value
 
 
@@ -130,11 +173,15 @@ def delete(path: str, msg: dict, flow: dict | None = None, global_context: dict 
     cur = _container(root, msg, flow, global_context)
     try:
         for t in toks[:-1]:
-            cur = cur[t]
-        if isinstance(cur, list) and isinstance(toks[-1], int):
-            cur.pop(toks[-1])
-        else:
-            cur.pop(toks[-1], None)
+            if isinstance(cur, list):
+                cur = cur[_list_index(cur, t)]
+            else:
+                cur = cur[t]
+        last = toks[-1]
+        if isinstance(cur, list) and isinstance(last, int):
+            cur.pop(_list_index(cur, last))
+        elif isinstance(cur, dict):
+            cur.pop(last, None)
     except Exception:
         return
 

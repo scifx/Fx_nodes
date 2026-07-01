@@ -47,37 +47,88 @@ class FxRuntime:
                 "fps": fps, "dt": 1.0 / fps, "wall": time.time()}
 
     def get_engine(self, tree) -> ExecutionEngine:
+        """Return an engine bound to the *current* live tree object.
+
+        Engines/adapters are cached by tree name, but Blender can invalidate the
+        underlying RNA object while leaving a new node group with the same name
+        (addon reload, file reload, delete/recreate).  Always rebind the cached
+        adapter to the live tree passed by the operator/handler before firing.
+        """
         from ..ui.node_tree import BpyGraphAdapter
         name = tree.name
-        if name not in self.engines:
+        adapter = self.adapters.get(name)
+        eng = self.engines.get(name)
+
+        if adapter is None:
             adapter = BpyGraphAdapter(tree)
-            eng = ExecutionEngine(adapter, context_provider=self._context_provider)
-            self._augment_engine(eng, tree)
-            self.engines[name] = eng
             self.adapters[name] = adapter
-        return self.engines[name]
+        else:
+            try:
+                adapter.rebind(tree)
+            except ReferenceError:
+                adapter = BpyGraphAdapter(tree)
+                self.adapters[name] = adapter
+
+        if eng is None:
+            eng = ExecutionEngine(adapter, context_provider=self._context_provider)
+            self.engines[name] = eng
+        else:
+            # Keep existing flow/global/node contexts, but make graph live again.
+            eng.graph = adapter
+
+        # Reinstall helpers so their closures capture the current tree name, not
+        # an old StructRNA object that may later be removed.
+        self._augment_engine(eng, tree)
+        return eng
+
+    def _record_error(self, tree_name: str, uid: str, msg: str):
+        """Best-effort bridge for runtime/async errors into node UI + stats."""
+        eng = self.engines.get(tree_name)
+        if eng is not None:
+            eng.stats.node_error(uid, msg)
+            try:
+                eng._emit("error", node=uid, msg=msg)
+            except Exception:
+                pass
+        if not _HAS_BPY:
+            return
+        try:
+            tree = bpy.data.node_groups.get(tree_name)
+            if tree:
+                for node in tree.nodes:
+                    if getattr(node, "node_uid", "") == uid:
+                        node._error = msg
+                        break
+        except Exception:
+            pass
 
     def _augment_engine(self, eng: ExecutionEngine, tree):
         rt = self
+        tree_name = tree.name
 
         def schedule(secs, uid, signal):
-            rt._delayed.append((time.time() + secs, tree.name, uid, signal))
+            rt._delayed.append((time.time() + secs, tree_name, uid, signal))
 
         def continue_from(uid, out_sock, signal):
             # re-enter propagation from uid's output socket
-            adapter = rt.adapters.get(tree.name)
+            adapter = rt.adapters.get(tree_name)
             if adapter is None:
                 return
-            for tgt_uid, _ in adapter.downstream(uid, out_sock):
+            try:
+                downstream = list(adapter.downstream(uid, out_sock))
+            except ReferenceError:
+                rt._record_error(tree_name, uid, "node tree was removed; please run again")
+                return
+            for tgt_uid, _ in downstream:
                 eng.fire(tgt_uid, signal.child())
 
         def run_async(work, on_done, uid):
             def thread_body():
                 try:
                     res = work()
-                    rt._async_results.put((uid, tree.name, res, None, on_done))
+                    rt._async_results.put((uid, tree_name, res, None, on_done))
                 except Exception as e:  # noqa
-                    rt._async_results.put((uid, tree.name, None, str(e), on_done))
+                    rt._async_results.put((uid, tree_name, None, str(e), on_done))
             threading.Thread(target=thread_body, daemon=True).start()
 
         eng.schedule = schedule          # type: ignore[attr-defined]
@@ -95,9 +146,20 @@ class FxRuntime:
 
     def fire_node(self, tree, node, extra_context=None, msg=None):
         eng = self.get_engine(tree)
-        self.adapters[tree.name].reindex()
+        adapter = self.adapters.get(tree.name)
+        if adapter is not None:
+            try:
+                adapter.rebind(tree)
+            except ReferenceError:
+                # The tree passed by Blender is already invalid; report on the
+                # node if possible and let the operator cancel gracefully.
+                try:
+                    node._error = "node tree was removed; please select the live tree and run again"
+                except Exception:
+                    pass
+                raise
         sig = Signal(payload=dict(msg or {}), source=node.node_uid)
-        eng.fire(node.node_uid, sig, extra_context=extra_context)
+        return eng.fire(node.node_uid, sig, extra_context=extra_context)
 
     # ---- start / stop ------------------------------------------------------
     def start(self):
@@ -208,8 +270,8 @@ class FxRuntime:
                 uid, tree_name, res, err, on_done = self._async_results.get()
                 try:
                     on_done(res, err)
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._record_error(tree_name, uid, f"async callback failed: {type(e).__name__}: {e}")
                 drained += 1
             # delayed continuations
             now = time.time()

@@ -21,7 +21,65 @@ bl_info = {
 import importlib
 import sys
 
-import bpy
+try:
+    import bpy  # type: ignore
+except Exception:  # pragma: no cover - enables headless unit tests/imports
+    import types as _types
+
+    bpy = _types.ModuleType("bpy")
+
+    class _Prop:
+        def __init__(self, **kw):
+            self.kw = kw
+
+    def _prop_factory(name):
+        return lambda **kw: _Prop(name=name, **kw)
+
+    _props = _types.ModuleType("bpy.props")
+    for _p in [
+        "FloatProperty", "IntProperty", "StringProperty", "BoolProperty",
+        "EnumProperty", "FloatVectorProperty", "PointerProperty",
+    ]:
+        setattr(_props, _p, _prop_factory(_p))
+
+    class _Base:
+        def __init_subclass__(cls, **kw):
+            super().__init_subclass__(**kw)
+
+    _types_mod = _types.ModuleType("bpy.types")
+    for _t in [
+        "Node", "NodeSocket", "NodeTree", "Operator", "Panel", "Menu",
+        "AddonPreferences", "Object",
+    ]:
+        setattr(_types_mod, _t, type(_t, (_Base,), {}))
+    _types_mod.NODE_MT_add = _types.SimpleNamespace(append=lambda f: None, remove=lambda f: None)
+
+    _app = _types.ModuleType("bpy.app")
+    _handlers = _types.ModuleType("bpy.app.handlers")
+    for _h in [
+        "frame_change_post", "depsgraph_update_post", "render_pre",
+        "render_post", "save_post", "load_post",
+    ]:
+        setattr(_handlers, _h, [])
+    _app.handlers = _handlers
+    _app.timers = _types.SimpleNamespace(
+        register=lambda *a, **k: None,
+        unregister=lambda *a, **k: None,
+        is_registered=lambda *a, **k: False,
+    )
+
+    bpy.props = _props
+    bpy.types = _types_mod
+    bpy.app = _app
+    bpy.utils = _types.SimpleNamespace(register_class=lambda c: None, unregister_class=lambda c: None)
+    bpy.data = _types.SimpleNamespace(node_groups=[], texts={})
+    bpy.context = _types.SimpleNamespace()
+    bpy.ops = _types.SimpleNamespace()
+    sys.modules.setdefault("bpy", bpy)
+    sys.modules.setdefault("bpy.props", _props)
+    sys.modules.setdefault("bpy.types", _types_mod)
+    sys.modules.setdefault("bpy.app", _app)
+    sys.modules.setdefault("bpy.app.handlers", _handlers)
 
 from . import prefs as _prefs
 from .core import registry

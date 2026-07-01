@@ -105,7 +105,18 @@ class FXNODES_OT_fire_node(Operator):
         node = tree.nodes.get(self.node_name)
         if not node:
             self.report({'ERROR'}, "node not found"); return {'CANCELLED'}
-        RUNTIME.fire_node(tree, node)
+        try:
+            RUNTIME.fire_node(tree, node)
+        except ReferenceError as e:
+            self.report({'ERROR'}, f"Fx node tree was removed/stale; reopen/select the live tree and try again: {e}")
+            return {'CANCELLED'}
+        except Exception as e:
+            try:
+                node._error = f"{type(e).__name__}: {e}"
+            except Exception:
+                pass
+            self.report({'ERROR'}, f"Fx node run failed: {e}")
+            return {'CANCELLED'}
         return {'FINISHED'}
 
 
@@ -162,9 +173,9 @@ class FXNODES_OT_paste_property_menu(Operator):
             layout.label(text=path_utils.compact_path_label(data_path, 72), icon="RNA")
             layout.separator()
             op = layout.operator("fx_nodes.paste_property_node", text="Get Property", icon="RNA")
-            op.mode = "GET"
+            op.mode = "GET"; op.data_path = data_path
             op = layout.operator("fx_nodes.paste_property_node", text="Set Property", icon="RNA")
-            op.mode = "SET"
+            op.mode = "SET"; op.data_path = data_path
 
         context.window_manager.popup_menu(draw_menu, title="Paste Full Data Path", icon="RNA")
         return {'FINISHED'}
@@ -178,7 +189,16 @@ class FXNODES_OT_paste_property_node(Operator):
     bl_idname = "fx_nodes.paste_property_node"
     bl_label = "Paste Property Node"
     bl_description = "Shift+V：把剪贴板里的 Copy Full Data Path 解析为 Get 或 Set Property 节点"
-    bl_options = {'REGISTER', 'UNDO'}
+    # Do not use REGISTER here: Blender's redo panel can re-run the operator
+    # after the user edited the generated node, creating/resetting nodes from
+    # the current clipboard.  The node itself is undoable; redo is not useful.
+    bl_options = {'UNDO'}
+
+    data_path: StringProperty(
+        name="Full Data Path",
+        default="",
+        options={'HIDDEN'},
+    )
 
     mode: EnumProperty(
         name="Node Type",
@@ -200,29 +220,31 @@ class FXNODES_OT_paste_property_node(Operator):
         return (getattr(wm, "clipboard", "") if wm else "").strip()
 
     def invoke(self, context, event):
-        data_path = self._clipboard_path(context)
+        data_path = self.data_path or self._clipboard_path(context)
         try:
             path_utils.validate_path(data_path)
         except path_utils.PathError as e:
             self.report({'ERROR'}, f"剪贴板不是有效的 Blender 完整路径: {e}")
             return {'CANCELLED'}
+        self.data_path = data_path
         return context.window_manager.invoke_props_dialog(self, width=420)
 
     def draw(self, context):
         layout = self.layout
-        data_path = self._clipboard_path(context)
+        data_path = self.data_path or self._clipboard_path(context)
         layout.label(text="Create node from copied full data path:")
         box = layout.box()
         box.label(text=path_utils.compact_path_label(data_path, 64), icon="RNA")
         layout.prop(self, "mode", expand=True)
 
     def execute(self, context):
-        data_path = self._clipboard_path(context)
+        data_path = self.data_path or self._clipboard_path(context)
         try:
             path_utils.validate_path(data_path)
         except path_utils.PathError as e:
             self.report({'ERROR'}, f"剪贴板不是有效的 Blender 完整路径: {e}")
             return {'CANCELLED'}
+        self.data_path = data_path
 
         tree = context.space_data.edit_tree
         nodes = tree.nodes
@@ -363,6 +385,29 @@ class FXNODES_OT_debug_clear_all(Operator):
                     txt.clear()
             count += 1
         self.report({'INFO'}, f"Cleared {count} Debug node(s)")
+        return {'FINISHED'}
+
+
+class FXNODES_OT_debug_clear_errors(Operator):
+    bl_idname = "fx_nodes.debug_clear_errors"
+    bl_label = "Clear Debug Errors"
+    bl_description = "Clear Fx node runtime errors shown in the Debug panel"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        tree = getattr(context.space_data, "edit_tree", None)
+        if tree is None:
+            return {'CANCELLED'}
+        count = 0
+        for node in tree.nodes:
+            if getattr(node, "_error", ""):
+                node._error = ""
+                count += 1
+        eng = RUNTIME.engines.get(tree.name)
+        if eng is not None:
+            count += len(getattr(eng.stats, "errors", {}) or {})
+            eng.stats.errors.clear()
+        self.report({'INFO'}, f"Cleared {count} error(s)")
         return {'FINISHED'}
 
 
@@ -565,7 +610,7 @@ CLASSES = [
     FXNODES_OT_start, FXNODES_OT_stop, FXNODES_OT_fire_node, FXNODES_OT_input_listener,
     FXNODES_OT_paste_property_menu, FXNODES_OT_paste_property_node,
     FXNODES_OT_open_text_editor, FXNODES_OT_function_new_text,
-    FXNODES_OT_debug_clear_node, FXNODES_OT_debug_clear_all,
+    FXNODES_OT_debug_clear_node, FXNODES_OT_debug_clear_all, FXNODES_OT_debug_clear_errors,
     FXNODES_OT_cache_clear_node,
     FXNODES_OT_test_ai, FXNODES_OT_ai_generate_expr, FXNODES_OT_ai_scene_plan,
     FXNODES_OT_ai_chat_generate,

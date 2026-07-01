@@ -77,9 +77,38 @@ class TestExpr(unittest.TestCase):
         self.assertAlmostEqual(expr.evaluate("amp * 2", {"amp": 3}), 6)
         self.assertEqual(expr.evaluate("'on' if f%2==0 else 'off'", {"f": 4}), "on")
 
+    def test_node_red_dot_access(self):
+        vars = {
+            "msg": {"payload": {"x": 2}, "topic": "t"},
+            "payload": {"x": 2},
+            "flow": {"count": 3},
+            "global_context": {"seed": 4},
+            "Global": {"seed": 4},
+            "context": {"frame": 10},
+        }
+        self.assertTrue(expr.evaluate("msg.payload.x == 2 and topic == 't'", {**vars, "topic": "t"}))
+        self.assertEqual(expr.evaluate("flow.count + Global.seed", vars), 7)
+        self.assertEqual(expr.evaluate("context.frame + flow.count", vars), 13)
+        self.assertEqual(expr.evaluate("'Global.seed'"), "Global.seed")
+        with self.assertRaises(expr.ExprError):
+            expr.evaluate("global.seed", vars)
+
+    def test_missing_payload_is_falsy_for_switch_conditions(self):
+        self.assertTrue(expr.evaluate("not msg.payload", {"msg": {}}))
+        self.assertFalse(expr.evaluate("msg.payload > 0", {"msg": {}}))
+        self.assertTrue(expr.evaluate("msg.payload == None", {"msg": {}}))
+        self.assertFalse(expr.evaluate("payload > 0", {"payload": expr.MISSING}))
+
     def test_ternary_and_collections(self):
-        self.assertEqual(expr.evaluate("[i for i in range(3)]") if False else expr.evaluate("range(3)"), [0, 1, 2])
+        self.assertEqual(expr.evaluate("[i for i in range(3)]"), [0, 1, 2])
         self.assertEqual(expr.evaluate("{'x': 1, 'y': 2}")["y"], 2)
+
+    def test_python_eval_methods_and_msg_keys(self):
+        vars = {"msg": {"name": "cube", "items": [1, 2, 3]}, "name": "cube", "items": [1, 2, 3]}
+        self.assertEqual(expr.evaluate("name.upper()", vars), "CUBE")
+        self.assertEqual(expr.evaluate("msg.name.upper()", vars), "CUBE")
+        # msg.items should prefer the user key over dict.items method when the key exists.
+        self.assertEqual(expr.evaluate("sum(msg.items)", vars), 6)
 
     def test_rejects_import(self):
         with self.assertRaises(expr.ExprError):
@@ -107,12 +136,19 @@ class TestMsgPath(unittest.TestCase):
         self.assertEqual(msgpath.get("msg['payload'].x", msg), 1)
         msgpath.set("payload.x", 2, msg, flow, glob)
         msgpath.set("flow.count", 3, msg, flow, glob)
-        msgpath.set("global.seed", 4, msg, flow, glob)
+        msgpath.set("Global.seed", 4, msg, flow, glob)
         self.assertEqual(msg["payload"]["x"], 2)
         self.assertEqual(flow["count"], 3)
         self.assertEqual(glob["seed"], 4)
         msgpath.delete("payload.x", msg, flow, glob)
         self.assertNotIn("x", msg["payload"])
+
+    def test_set_creates_intermediate_lists(self):
+        msg = {}
+        msgpath.set("payload.items[0].name", "A", msg)
+        msgpath.set("payload.items[1].name", "B", msg)
+        self.assertEqual(msgpath.get("payload.items[0].name", msg), "A")
+        self.assertEqual(msgpath.get("payload.items[1].name", msg), "B")
 
 
 class TestPath(unittest.TestCase):
@@ -214,6 +250,19 @@ class TestEngine(unittest.TestCase):
         g.link("A", "out", "B"); g.link("B", "out", "C")
         ExecutionEngine(g).fire("A")
         self.assertEqual(seen["x"], 2)
+
+    def test_process_reported_error_is_not_swallowed(self):
+        g = FakeGraph()
+
+        def bad_expr(sig, eng):
+            node._error = "bad expression"
+            return []
+
+        node = g.add(FakeNode("N", bad_expr))
+        eng = ExecutionEngine(g)
+        eng.fire("N")
+        self.assertEqual(node._error, "bad expression")
+        self.assertEqual(eng.stats.errors.get("N"), "bad expression")
 
     def test_error_isolation(self):
         g = FakeGraph()

@@ -126,18 +126,22 @@ class ExecutionEngine:
 
     def _run_node(self, node: NodeLike, signal: Signal) -> List[Tuple[str, Signal]]:
         # Clear previous error BEFORE running, not after.
-        # The old code cleared _error unconditionally AFTER process(),
-        # which instantly wiped out business-logic errors set inside
-        # node.process() (e.g. "没有脚本", "AI 生成未开启").
-        # This made the UI never show node errors.
+        # Node.process() is allowed to set _error and return [] for expected
+        # user-facing failures (bad expression/path, disabled AI, etc.).  The
+        # engine must preserve and publish those errors instead of treating them
+        # as successful silent drops.
         if hasattr(node, "_error"):
             node._error = ""
         try:
-            result = node.process(signal, self) or []
+            result = list(node.process(signal, self) or [])
             self.stats.node_fired(node.node_uid)
-            # DO NOT clear node._error here – process() may have set it
-            # intentionally to report a non-exception failure.
-            return list(result)
+            err = str(getattr(node, "_error", "") or "")
+            if err:
+                self.stats.node_error(node.node_uid, err)
+                self._emit("error", node=node.node_uid, msg=err)
+            else:
+                self.stats.node_ok(node.node_uid)
+            return result
         except Exception as e:  # isolate
             msg = f"{type(e).__name__}: {e}"
             if hasattr(node, "_error"):
@@ -199,6 +203,9 @@ class EngineStats:
 
     def node_error(self, uid: str, msg: str) -> None:
         self.errors[uid] = msg
+
+    def node_ok(self, uid: str) -> None:
+        self.errors.pop(uid, None)
 
     def as_dict(self) -> Dict[str, Any]:
         return {

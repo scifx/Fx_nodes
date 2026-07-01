@@ -2,6 +2,7 @@
 headless and verify: all modules import, registry populates, every node
 class is well-formed, and the AI expression validator rejects unsafe output.
 """
+import json
 import os
 import sys
 import types
@@ -106,6 +107,145 @@ class TestIntegration(unittest.TestCase):
                   "FxStringSocket", "FxObjectSocket", "FxDataSocket"]:
             self.assertIn(s, socks)
 
+    def test_switch_requires_boolean_eval_result(self):
+        from Fx_nodes.nodes.logic import SwitchNode
+        from Fx_nodes.core.signal import Signal
+        node = SwitchNode.__new__(SwitchNode)
+        node.name = "Switch"
+        node._error = ""
+        engine = types.SimpleNamespace(flow_context={}, global_context={}, node_context=lambda uid: {})
+
+        node.condition = "msg.value > 1"
+        out = node.process(Signal(payload={"value": 2}), engine)
+        self.assertEqual(out[0][0], "True")
+
+        node.condition = "msg.value"
+        out = node.process(Signal(payload={"value": 2}), engine)
+        self.assertEqual(out, [])
+        self.assertIn("必须返回 True 或 False", node._error)
+
+    def test_context_global_roundtrip_and_nested_paths(self):
+        from Fx_nodes.nodes.data import ContextNode
+        from Fx_nodes.core.signal import Signal
+        engine = types.SimpleNamespace(flow_context={}, global_context={}, node_context=lambda uid: {})
+
+        writer = ContextNode.__new__(ContextNode)
+        writer._error = ""; writer.mode = "MSG_TO_GLOBAL"
+        writer.context_key = "settings.seed"
+        writer.msg_path = "payload"
+        writer.value_expr = "payload + 1"
+        writer.last_value = ""
+        sig = Signal(payload={"payload": 41})
+        self.assertTrue(writer.process(sig, engine))
+        self.assertEqual(engine.global_context, {"settings": {"seed": 42}})
+
+        reader = ContextNode.__new__(ContextNode)
+        reader._error = ""; reader.mode = "GLOBAL_TO_MSG"
+        reader.context_key = "Global.settings.seed"
+        reader.msg_path = "answer"
+        reader.value_expr = "payload"
+        reader.last_value = ""
+        out = reader.process(sig, engine)
+        self.assertTrue(out)
+        self.assertEqual(sig.msg["answer"], 42)
+        self.assertEqual(reader._error, "")
+
+    def test_context_global_legacy_alias_and_capital_root(self):
+        from Fx_nodes.nodes.data import ContextNode
+        from Fx_nodes.core.signal import Signal
+        # Simulate an old/reloaded engine where Debug/legacy code populated
+        # global_attrs but global_context is a distinct empty dict.
+        engine = types.SimpleNamespace(flow_context={}, global_context={}, global_attrs={"test": 10}, node_context=lambda uid: {})
+        node = ContextNode.__new__(ContextNode)
+        node._error = ""; node.mode = "GLOBAL_TO_MSG"
+        node.context_key = "test"
+        node.msg_path = "payload"
+        node.value_expr = "payload"
+        node.last_value = ""
+        sig = Signal(payload={})
+        self.assertTrue(node.process(sig, engine))
+        self.assertEqual(sig.msg["payload"], 10)
+        self.assertIs(engine.global_attrs, engine.global_context)
+
+        sig2 = Signal(payload={})
+        node.context_key = 'Global["test"]'
+        self.assertTrue(node.process(sig2, engine))
+        self.assertEqual(sig2.msg["payload"], 10)
+
+    def test_context_global_missing_key_reports_error(self):
+        from Fx_nodes.nodes.data import ContextNode
+        from Fx_nodes.core.signal import Signal
+        engine = types.SimpleNamespace(flow_context={}, global_context={}, node_context=lambda uid: {})
+        node = ContextNode.__new__(ContextNode)
+        node._error = ""; node.mode = "GLOBAL_TO_MSG"
+        node.context_key = "missing"
+        node.msg_path = "payload"
+        node.value_expr = "payload"
+        node.last_value = ""
+        self.assertEqual(node.process(Signal(payload={}), engine), [])
+        self.assertIn("global context key not found", node._error)
+
+    def test_debug_reads_global_and_show_context_includes_global(self):
+        from Fx_nodes.nodes.data import DebugNode
+        from Fx_nodes.core.signal import Signal
+
+        class DebugHarness(DebugNode, dict):
+            pass
+
+        engine = types.SimpleNamespace(flow_context={"f": 1}, global_context={}, global_attrs={"test": 10}, node_context=lambda uid: {})
+        node = DebugHarness()
+        node._error = ""; node.path = "Global"; node.fire_count = 0
+        node.show_context = False; node.log_to_text = False; node.debug_text_name = ""; node.max_rows = 8
+        self.assertTrue(node.process(Signal(payload={}), engine))
+        self.assertEqual(json.loads(node["_preview"]), {"test": 10})
+
+        node.show_context = True
+        self.assertTrue(node.process(Signal(payload={}, context={"frame": 7}), engine))
+        preview = json.loads(node["_preview"])
+        self.assertEqual(preview["Global"], {"test": 10})
+        self.assertEqual(preview["flow"], {"f": 1})
+        self.assertEqual(preview["context"], {"frame": 7})
+
+    def test_debug_missing_path_reports_error_instead_of_null(self):
+        from Fx_nodes.nodes.data import DebugNode
+        from Fx_nodes.core.signal import Signal
+
+        class DebugHarness(DebugNode, dict):
+            pass
+
+        engine = types.SimpleNamespace(flow_context={}, global_context={}, node_context=lambda uid: {})
+        node = DebugHarness()
+        node._error = ""; node.path = "Global.missing"; node.fire_count = 0
+        node.show_context = False; node.log_to_text = False; node.debug_text_name = ""; node.max_rows = 8
+        self.assertEqual(node.process(Signal(payload={}), engine), [])
+        self.assertIn("path not found: Global.missing", node._error)
+
+    def test_runtime_rebinds_stale_adapter_for_same_tree_name(self):
+        from Fx_nodes.core.engine import ExecutionEngine
+        from Fx_nodes.core.runtime import FxRuntime
+
+        class StaleAdapter:
+            def rebind(self, tree):
+                raise ReferenceError("StructRNA of type FxNodeTree has been removed")
+            def get_node(self, uid):
+                return None
+            def downstream(self, uid, out_socket):
+                return []
+
+        rt = FxRuntime()
+        stale = StaleAdapter()
+        eng = ExecutionEngine(stale)
+        eng.global_context["kept"] = 1
+        rt.adapters["Tree"] = stale
+        rt.engines["Tree"] = eng
+
+        live_tree = types.SimpleNamespace(name="Tree", nodes=[])
+        repaired = rt.get_engine(live_tree)
+        self.assertIs(repaired, eng)
+        self.assertIs(repaired.graph, rt.adapters["Tree"])
+        self.assertIs(rt.adapters["Tree"].tree, live_tree)
+        self.assertEqual(repaired.global_context["kept"], 1)
+
     def test_ai_expr_validator_rejects_unsafe(self):
         from Fx_nodes.nodes.ai import AIExpressionNode
         node = AIExpressionNode.__new__(AIExpressionNode)
@@ -120,6 +260,10 @@ class TestIntegration(unittest.TestCase):
         from Fx_nodes.nodes.ai.provider import make_provider
         p = make_provider("openai-compat", base_url="http://x/v1", api_key="k", model="m")
         self.assertEqual(p.model, "m")
+
+    def test_debug_panel_is_dedicated_tab(self):
+        from Fx_nodes.ui.panels import FXNODES_PT_debug_console
+        self.assertEqual(FXNODES_PT_debug_console.bl_category, "Fx Debug")
 
     def test_register_unregister_runs(self):
         # should not raise with mocked bpy.utils

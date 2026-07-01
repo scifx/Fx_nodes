@@ -1,4 +1,4 @@
-"""N-panel UI in the Fx Nodes node editor: engine control + inspector + AI."""
+"""N-panel UI in the Fx Nodes node editor: engine/AI plus a dedicated Debug tab."""
 from __future__ import annotations
 
 import json
@@ -17,6 +17,15 @@ class FxPanelBase:
     @classmethod
     def poll(cls, context):
         return getattr(context.space_data, "tree_type", "") == "FxNodeTree"
+
+
+class FxDebugPanelBase(FxPanelBase):
+    """Dedicated Node-RED-style debug sidebar tab.
+
+    Keep Debug output away from Engine/AI controls so the side bar can be used as
+    a scrolling message console: filter, clear, inspect errors, open full logs.
+    """
+    bl_category = "Fx Debug"
 
 
 class FXNODES_PT_engine(FxPanelBase, Panel):
@@ -46,12 +55,12 @@ class FXNODES_PT_engine(FxPanelBase, Panel):
             box.label(text=f"Last: {s['last_ms']}ms  Avg: {s['avg_ms']}ms")
             if s["errors"]:
                 box.alert = True
-                box.label(text=f"Errors: {s['errors']}", icon="ERROR")
+                box.label(text=f"Errors: {s['errors']} — see Fx Debug tab", icon="ERROR")
 
 
-class FXNODES_PT_debug(FxPanelBase, Panel):
-    bl_label = "Debug"
-    bl_idname = "FXNODES_PT_debug"
+class FXNODES_PT_debug_console(FxDebugPanelBase, Panel):
+    bl_label = "Debug Console"
+    bl_idname = "FXNODES_PT_debug_console"
 
     def _pretty_lines(self, data):
         if data in ({}, None, ""):
@@ -64,8 +73,22 @@ class FXNODES_PT_debug(FxPanelBase, Panel):
     def _match(self, node, raw, flt):
         if not flt:
             return True
-        haystack = f"{node.name} {getattr(node, 'path', '')} {raw}".lower()
+        err = getattr(node, "_error", "") or ""
+        haystack = f"{node.name} {getattr(node, 'path', '')} {raw} {err}".lower()
         return flt.lower() in haystack
+
+    def _collect_errors(self, tree):
+        errors = []
+        eng = RUNTIME.engines.get(tree.name)
+        if eng is not None:
+            for uid, msg in getattr(eng.stats, "errors", {}).items():
+                errors.append((uid.split("/", 1)[-1], msg))
+        seen = {name for name, _ in errors}
+        for node in tree.nodes:
+            err = getattr(node, "_error", "") or ""
+            if err and node.name not in seen:
+                errors.append((node.name, err))
+        return errors
 
     def draw(self, context):
         layout = self.layout
@@ -73,16 +96,35 @@ class FXNODES_PT_debug(FxPanelBase, Panel):
         if not tree:
             return
 
+        # Toolbar: filter, clear messages, clear errors.
         row = layout.row(align=True)
         row.prop(tree, "debug_filter", text="", icon="VIEWZOOM")
         row.operator("fx_nodes.debug_clear_all", text="", icon="TRASH")
-        row = layout.row(align=True)
-        row.prop(tree, "debug_rows")
-        row.prop(tree, "debug_show_empty", text="Empty")
+        row.operator("fx_nodes.debug_clear_errors", text="", icon="ERROR")
 
-        debug_nodes = [n for n in tree.nodes if n.bl_idname == "FxDebug"]
+        row = layout.row(align=True)
+        row.prop(tree, "debug_rows", text="Rows")
+        row.prop(tree, "debug_show_empty", text="Empty")
+        row.prop(tree, "debug_show_errors", text="Errors")
+        row = layout.row(align=True)
+        row.prop(tree, "debug_show_context", text="Context Preview")
+
+        debug_nodes = [n for n in tree.nodes if getattr(n, "bl_idname", "") == "FxDebug"]
+        errors = self._collect_errors(tree) if getattr(tree, "debug_show_errors", True) else []
+
+        if errors:
+            err_box = layout.box()
+            err_box.alert = True
+            header = err_box.row(align=True)
+            header.label(text=f"Errors ({len(errors)})", icon="ERROR")
+            header.operator("fx_nodes.debug_clear_errors", text="Clear", icon="X")
+            for name, msg in errors[: max(1, tree.debug_rows)]:
+                err_box.label(text=f"{name}: {msg}"[:140], icon="ERROR")
+            if len(errors) > tree.debug_rows:
+                err_box.label(text=f"… +{len(errors) - tree.debug_rows} more error(s)")
+
         if not debug_nodes:
-            layout.label(text="Add a Debug node", icon="INFO")
+            layout.label(text="Add a Debug node to collect messages", icon="INFO")
             return
 
         shown = 0
@@ -94,6 +136,18 @@ class FXNODES_PT_debug(FxPanelBase, Panel):
                 data = json.loads(raw)
             except Exception:
                 data = raw
+
+            # Optional console-side context preview.  This is separate from the
+            # Debug node's own Show Runtime Context toggle so users can inspect
+            # Flow/Global state from the console without editing individual nodes.
+            if tree.debug_show_context:
+                eng = RUNTIME.engines.get(tree.name)
+                data = {
+                    "value": data,
+                    "flow": getattr(eng, "flow_context", {}) if eng else {},
+                    "Global": getattr(eng, "global_context", {}) if eng else {},
+                }
+
             lines = self._pretty_lines(data)
             if not lines and not tree.debug_show_empty:
                 continue
@@ -107,11 +161,16 @@ class FXNODES_PT_debug(FxPanelBase, Panel):
             op = header.operator("fx_nodes.open_text_editor", text="", icon="TEXT")
             op.text_name = getattr(n, "debug_text_name", "")
 
+            node_err = getattr(n, "_error", "") or ""
+            if node_err:
+                box.alert = True
+                box.label(text=node_err[:140], icon="ERROR")
+
             if lines:
                 for line in lines[:tree.debug_rows]:
-                    box.label(text=line[:120])
+                    box.label(text=line[:140])
                 if len(lines) > tree.debug_rows:
-                    box.label(text=f"… +{len(lines) - tree.debug_rows} more lines")
+                    box.label(text=f"… +{len(lines) - tree.debug_rows} more line(s). Open Text log for scrolling.")
             else:
                 box.label(text="(no data yet)", icon="INFO")
             shown += 1
@@ -133,4 +192,4 @@ class FXNODES_PT_ai(FxPanelBase, Panel):
         layout.prop(prefs, "allow_ai")
 
 
-CLASSES = [FXNODES_PT_engine, FXNODES_PT_debug, FXNODES_PT_ai]
+CLASSES = [FXNODES_PT_engine, FXNODES_PT_debug_console, FXNODES_PT_ai]

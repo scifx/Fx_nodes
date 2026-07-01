@@ -62,15 +62,15 @@ wall
 
 - **Trigger / Inject 类**：Timer、Frame、Key、Click、Scene、Start、Manual。
 - **Function**：完整 Python 代码能力，支持 `import`，返回 `msg` / `None` / `[msg, ...]`。
-- **Expression**：安全表达式，默认写入 `msg.payload`，也可按需写到其它 `msg/flow/global` 属性。
+- **Expression**：安全表达式，默认写入 `msg.payload`，也可按需写到其它 `msg/flow/Global` 属性。
 - **Change**：Set / Delete / Move 任意 `msg` / `flow` / `global` 属性。
 - **Switch**：表达式条件分流 True / False。
 - **Gate / Counter / Delay**：常用控制流节点。
 - **Get Property**：读取 Blender `Copy Full Data Path` 到 msg 路径。
 - **Set Property**：把表达式结果写入 Blender full data path。
 - **Context**：显式读写 flow/global context。
-- **Debug**：Node-RED debug 节点；按路径查看 `msg`、`payload`、`flow.xxx`、`global.xxx`。
-- **AI 节点**：默认也遵循 `msg.payload` 输入/输出；必要时可显式写入 `msg` 的其它字段，或读取 `msg/flow/global` 里的场景参考信息。默认不在运行时自动调用网络生成，需显式开启对应的 `Generate On Flow` 选项。
+- **Debug**：Node-RED debug 节点；按路径查看 `msg`、`payload`、`flow.xxx`、`Global.xxx`。
+- **AI 节点**：默认也遵循 `msg.payload` 输入/输出；必要时可显式写入 `msg` 的其它字段，或读取 `msg/flow/Global` 里的场景参考信息。默认不在运行时自动调用网络生成，需显式开启对应的 `Generate On Flow` 选项。
 
 ## Function 节点
 

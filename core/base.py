@@ -64,6 +64,27 @@ class FxBaseNode(Node):
     def add_out(self, idname, name):
         return self.outputs.new(idname, name)
 
+    def _move_flow_sockets_to_top(self, sockets):
+        """Keep control-flow sockets as the first/top sockets in the node UI.
+
+        Blender's node API exposes sockets on the left/right side, not literal
+        top-edge ports.  The practical way to keep long node bodies from making
+        flow wiring painful is to keep all FxFlowSocket entries before any data
+        sockets.  This also repairs older saved nodes if socket order drifted.
+        """
+        try:
+            flow_sockets = [s for s in sockets if getattr(s, "bl_idname", "") == FLOW_SOCKET]
+            for target_index, sock in enumerate(flow_sockets):
+                current_index = next((i for i, s in enumerate(sockets) if s == sock), target_index)
+                if current_index != target_index and hasattr(sockets, "move"):
+                    sockets.move(current_index, target_index)
+        except Exception:
+            pass
+
+    def ensure_flow_sockets_top(self):
+        self._move_flow_sockets_to_top(getattr(self, "inputs", []))
+        self._move_flow_sockets_to_top(getattr(self, "outputs", []))
+
     # ---- helpers for process() ------------------------------------------
     def flow_out(self, signal: Signal, socket="▶", **msg_updates):
         """Continue down the control wire with the same Node-RED msg.
@@ -115,7 +136,30 @@ class FxBaseNode(Node):
         return getattr(engine, "flow_context", {})
 
     def global_context(self, engine):
-        return getattr(engine, "global_context", getattr(engine, "global_attrs", {}))
+        """Return the engine-wide global context store.
+
+        Older iterations exposed ``global_attrs`` while the Node-RED-style API
+        uses ``global_context``.  In normal ExecutionEngine instances these are
+        aliases, but after reloads/tests/old files they may diverge.  Merge and
+        re-alias them so nodes reading Global see the same data Debug/legacy
+        writers show.
+        """
+        glob = getattr(engine, "global_context", None)
+        attrs = getattr(engine, "global_attrs", None)
+        if glob is None:
+            glob = attrs if attrs is not None else {}
+            try:
+                engine.global_context = glob
+            except Exception:
+                pass
+        if attrs is not None and attrs is not glob and isinstance(glob, dict) and isinstance(attrs, dict):
+            for k, v in attrs.items():
+                glob.setdefault(k, v)
+            try:
+                engine.global_attrs = glob
+            except Exception:
+                pass
+        return glob
 
     def globals(self, engine):
         return self.global_context(engine)
@@ -124,21 +168,31 @@ class FxBaseNode(Node):
         """Variables visible to expressions.
 
         Node-RED conventions are first-class: ``msg``, ``payload``, ``topic``,
-        ``flow`` and ``global``.  For convenience, top-level msg keys are also
-        exposed as variables, so ``payload + 1`` works.
+        ``flow`` and ``Global`` (uppercase, because lowercase ``global`` is a
+        Python keyword).  For convenience, top-level msg keys are also exposed
+        as variables, so ``payload + 1`` works.
         """
         msg = signal.msg
         flow = self.flow_context(engine)
         glob = self.global_context(engine)
+        try:
+            from . import expr as _expr
+            missing = _expr.MISSING
+        except Exception:
+            missing = None
         v = dict(signal.context)
         v.update(msg)  # top-level msg keys have highest convenience precedence
         v["msg"] = msg
-        v["payload"] = msg.get("payload")
-        v["topic"] = msg.get("topic")
+        v["payload"] = msg["payload"] if "payload" in msg else missing
+        v["topic"] = msg["topic"] if "topic" in msg else missing
+        v["context"] = signal.context
         v["flow"] = flow
-        v["global"] = glob
+        v["Global"] = glob
         v["global_context"] = glob
-        # Backwards-compatible names.
+        # Backwards-compatible/convenience names.  Lowercase "global" is not
+        # usable in Python eval source, but keeping it in the env is harmless
+        # for callers that inspect expr_vars() directly.
+        v["global"] = glob
         v["attrs"] = msg
         v["G"] = glob
         return v
@@ -177,6 +231,7 @@ class FxBaseNode(Node):
         except Exception:
             pass
         self.init_sockets()
+        self.ensure_flow_sockets_top()
 
     def init_sockets(self):
         """Override: create inputs/outputs."""
@@ -188,6 +243,7 @@ class FxBaseNode(Node):
 
     # ---- drawing ---------------------------------------------------------
     def draw_buttons(self, context, layout):
+        self.ensure_flow_sockets_top()
         self.draw_body(context, layout)
         err = getattr(self, "_error", "")
         if err:

@@ -148,7 +148,7 @@ class ExpressionNode(FxLogicNode):
     expression: StringProperty(
         name="Expr",
         default="payload",
-        description="安全表达式；可用 msg/payload/topic/flow/G/global_context/frame/time",
+        description="安全表达式；可用 msg/payload/topic/flow/Global/G/global_context/frame/time",
     )
     out_path: StringProperty(name="Target", default="payload")
     live_value: StringProperty(name="Last", default="")
@@ -182,7 +182,11 @@ class SwitchNode(FxLogicNode):
     bl_label = "Switch"
     bl_icon = "TRIA_RIGHT"
 
-    condition: StringProperty(name="If", default="bool(payload)")
+    condition: StringProperty(
+        name="If",
+        default="bool(payload)",
+        description="Python eval expression. Must return True or False, not just a truthy/falsy value.",
+    )
 
     def init_sockets(self):
         self.add_in_flow()
@@ -194,12 +198,17 @@ class SwitchNode(FxLogicNode):
 
     def process(self, signal, engine):
         try:
-            ok = bool(expr.evaluate(self.condition, self.expr_vars(signal, engine)))
+            result = expr.evaluate(self.condition, self.expr_vars(signal, engine))
+            if not isinstance(result, bool):
+                raise expr.ExprError(
+                    f"Switch 表达式必须返回 True 或 False；当前返回 "
+                    f"{type(result).__name__}: {result!r}"
+                )
         except expr.ExprError as e:
             self._error = str(e)
             return []
         self._error = ""
-        return [("True" if ok else "False", signal)]
+        return [("True" if result else "False", signal)]
 
 
 @register_node

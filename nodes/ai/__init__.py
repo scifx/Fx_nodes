@@ -172,7 +172,7 @@ class _AIBase(FxBaseNode):
     reference_path: StringProperty(
         name="Reference",
         default="payload",
-        description="Optional extra AI reference property. Default is payload; change when you explicitly want msg.xxx / flow.xxx / global.xxx scene context.",
+        description="Optional extra AI reference property. Default is payload; change when you explicitly want msg.xxx / flow.xxx / Global.xxx scene context.",
     )
 
     def draw_reference_ui(self, layout):
@@ -305,14 +305,14 @@ class AIExpressionNode(_AIBase):
         "This is an expression sandbox, not full Python. "
         "Available variables follow the Node-RED message model: "
         "msg is a dict, payload is msg.get('payload'), topic is msg.get('topic'), "
-        "flow is the flow context dict, global_context and G are the global context dict. "
+        "flow is the flow context dict, Global, global_context and G are the global context dict. "
         "Top-level msg keys are also available as variables. Runtime variables include frame, time, dt, fps, wall, tick. "
-        "Use dictionary indexing for dicts, for example msg['count'] or flow['seed']; do not use msg.count. "
+        "You may use either dot or item access for dict-like values, for example msg.count, msg['count'], flow.seed or Global.seed. "
         "Allowed literals: numbers, strings, booleans, None, lists, tuples, dicts. "
         "Allowed operators: arithmetic, comparisons, boolean and/or/not, conditional expression. "
         "Allowed functions: sin cos tan asin acos atan atan2 sqrt pow exp log floor ceil abs round "
         "radians degrees hypot min max sum len int float str bool clamp lerp mix map_range noise rand randint uniform range sign. "
-        "Forbidden: imports, lambda, def, assignment, comprehensions, loops, attribute access except x y z w r g b a real imag, dunder names. "
+        "Forbidden: imports, def, assignment statements, loops as statements, dunder/private attribute access. "
         "Examples: payload * 2; clamp(payload, 0, 1); {'x': payload, 'frame': frame}; "
         "msg['items'][0]['name'] if len(msg['items']) else None"
     )
