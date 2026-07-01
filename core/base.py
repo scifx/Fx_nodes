@@ -7,7 +7,7 @@ ergonomic helpers (add_in_flow / add_out / flow_out ...) so a new node is a
 Subclass map:
     FxBaseNode      common drawing, error display, preview snapshot
       FxTriggerNode   has a Flow OUT, hooks an event source via eventbus
-      FxLogicNode     pure-ish transform of the signal
+      FxNodes     pure-ish transform of the signal
       FxActionNode    side effects on the scene
 """
 from __future__ import annotations
@@ -226,10 +226,15 @@ class FxBaseNode(Node):
     def init(self, context):
         self._error = ""
         try:
+            from ..config import get_node_color
             self.use_custom_color = True
-            self.color = self.fx_color
+            self.color = get_node_color(self, self.fx_color)
         except Exception:
-            pass
+            try:
+                self.use_custom_color = True
+                self.color = self.fx_color
+            except Exception:
+                pass
         self.init_sockets()
         self.ensure_flow_sockets_top()
 
@@ -313,7 +318,7 @@ class FxTriggerNode(FxBaseNode):
         return self.flow_out(signal)
 
 
-class FxLogicNode(FxBaseNode):
+class FxNodes(FxBaseNode):
     category = "Logic"
     fx_color = (0.16, 0.30, 0.48)
 

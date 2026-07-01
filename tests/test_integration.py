@@ -123,11 +123,11 @@ class TestIntegration(unittest.TestCase):
         node._error = ""
         engine = types.SimpleNamespace(flow_context={}, global_context={}, node_context=lambda uid: {})
 
-        node.condition = "msg.value > 1"
+        node.condition = "msg['value'] > 1"
         out = node.process(Signal(payload={"value": 2}), engine)
         self.assertEqual(out[0][0], "True")
 
-        node.condition = "msg.value"
+        node.condition = "msg['value']"
         out = node.process(Signal(payload={"value": 2}), engine)
         self.assertEqual(out, [])
         self.assertIn("必须返回 True 或 False", node._error)
@@ -291,7 +291,7 @@ class TestIntegration(unittest.TestCase):
 
     def test_dynamic_timer_trigger_updates(self):
         from Fx_nodes.core.runtime import RUNTIME
-        from Fx_nodes.nodes.triggers import TimerTriggerNode
+        from Fx_nodes.nodes.trigger import TimerTriggerNode
         node = TimerTriggerNode.__new__(TimerTriggerNode)
         node.interval = 0.5
         node.enabled = True

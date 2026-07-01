@@ -5,6 +5,8 @@ import bpy
 from bpy.types import AddonPreferences
 from bpy.props import StringProperty, BoolProperty
 
+from .config import get_ai_default
+
 # In legacy add-on installs this is usually "Fx_nodes".  In Blender 4.x
 # extension installs it can be a fully-qualified package name such as
 # "bl_ext.user_default.fx_nodes".  Using __package__ keeps preferences bound to
@@ -38,7 +40,7 @@ class FxPreferences(AddonPreferences):
 
     ai_base_url: StringProperty(
         name="AI Base URL",
-        default="https://api.openai.com/v1",
+        default=get_ai_default("base_url", "https://api.openai.com/v1"),
         description="OpenAI 兼容端点。可填 Ollama (http://localhost:11434/v1) 等。",
     )
     ai_api_key: StringProperty(name="API Key", default="", subtype="PASSWORD")

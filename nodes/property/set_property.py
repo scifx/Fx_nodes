@@ -8,7 +8,6 @@ from ...core.registry import register_node
 from ...core import expr
 from ...core import path as blender_path
 
-
 @register_node
 class PropertySetNode(FxActionNode):
     """Set a safe Blender full data path from a Python-style expression.

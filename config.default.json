@@ -1,0 +1,33 @@
+{
+  "ai": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "",
+    "model": "gpt-4o-mini"
+  },
+  "ui": {
+    "category_icons": {
+      "Trigger": "PLAY",
+      "Property": "RNA",
+      "Logic": "TRIA_RIGHT",
+      "Script": "SCRIPT",
+      "Data": "FILE_CACHE",
+      "Debug": "VIEWZOOM",
+      "AI": "OUTLINER_OB_LIGHT",
+      "Utility": "DOT",
+      "Custom": "PLUGIN"
+    },
+    "category_colors": {
+      "Trigger": [0.48, 0.18, 0.18],
+      "Property": [0.16, 0.40, 0.26],
+      "Logic": [0.16, 0.30, 0.48],
+      "Script": [0.22, 0.35, 0.52],
+      "Data": [0.15, 0.36, 0.40],
+      "Debug": [0.45, 0.32, 0.14],
+      "AI": [0.40, 0.18, 0.46],
+      "Utility": [0.25, 0.25, 0.28],
+      "Custom": [0.28, 0.28, 0.36]
+    },
+    "node_colors": {
+    }
+  }
+}

@@ -89,12 +89,9 @@ from .ui import panels as _panels
 from .ui import categories as _categories
 from . import operators as _operators
 
-# importing these populates registry.NODE_CLASSES through @register_node
-from .nodes import triggers as _t        # noqa: F401
-from .nodes import logic as _l           # noqa: F401
-from .nodes import actions as _a         # noqa: F401
-from .nodes import data as _d            # noqa: F401
-from .nodes import ai as _ai             # noqa: F401
+# importing .nodes recursively loads every node module under nodes/ and
+# populates registry.NODE_CLASSES through @register_node.
+from . import nodes as _nodes            # noqa: F401
 
 _BASE_CLASSES = [
     _prefs.FxPreferences,

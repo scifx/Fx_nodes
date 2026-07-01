@@ -77,7 +77,7 @@ class TestExpr(unittest.TestCase):
         self.assertAlmostEqual(expr.evaluate("amp * 2", {"amp": 3}), 6)
         self.assertEqual(expr.evaluate("'on' if f%2==0 else 'off'", {"f": 4}), "on")
 
-    def test_node_red_dot_access(self):
+    def test_plain_dict_expression_api(self):
         vars = {
             "msg": {"payload": {"x": 2}, "topic": "t"},
             "payload": {"x": 2},
@@ -86,17 +86,16 @@ class TestExpr(unittest.TestCase):
             "Global": {"seed": 4},
             "context": {"frame": 10},
         }
-        self.assertTrue(expr.evaluate("msg.payload.x == 2 and topic == 't'", {**vars, "topic": "t"}))
-        self.assertEqual(expr.evaluate("flow.count + Global.seed", vars), 7)
-        self.assertEqual(expr.evaluate("context.frame + flow.count", vars), 13)
+        self.assertTrue(expr.evaluate("msg['payload']['x'] == 2 and topic == 't'", {**vars, "topic": "t"}))
+        self.assertEqual(expr.evaluate("flow['count'] + Global['seed']", vars), 7)
+        self.assertEqual(expr.evaluate("context['frame'] + flow['count']", vars), 13)
         self.assertEqual(expr.evaluate("'Global.seed'"), "Global.seed")
+        with self.assertRaises(expr.ExprError):
+            expr.evaluate("msg.payload", vars)
         with self.assertRaises(expr.ExprError):
             expr.evaluate("global.seed", vars)
 
     def test_missing_payload_is_falsy_for_switch_conditions(self):
-        self.assertTrue(expr.evaluate("not msg.payload", {"msg": {}}))
-        self.assertFalse(expr.evaluate("msg.payload > 0", {"msg": {}}))
-        self.assertTrue(expr.evaluate("msg.payload == None", {"msg": {}}))
         self.assertFalse(expr.evaluate("payload > 0", {"payload": expr.MISSING}))
 
     def test_ternary_and_collections(self):
@@ -106,9 +105,8 @@ class TestExpr(unittest.TestCase):
     def test_python_eval_methods_and_msg_keys(self):
         vars = {"msg": {"name": "cube", "items": [1, 2, 3]}, "name": "cube", "items": [1, 2, 3]}
         self.assertEqual(expr.evaluate("name.upper()", vars), "CUBE")
-        self.assertEqual(expr.evaluate("msg.name.upper()", vars), "CUBE")
-        # msg.items should prefer the user key over dict.items method when the key exists.
-        self.assertEqual(expr.evaluate("sum(msg.items)", vars), 6)
+        self.assertEqual(expr.evaluate("msg['name'].upper()", vars), "CUBE")
+        self.assertEqual(expr.evaluate("sum(msg['items'])", vars), 6)
 
     def test_rejects_import(self):
         with self.assertRaises(expr.ExprError):

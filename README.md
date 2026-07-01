@@ -9,7 +9,7 @@
 
 Fx Nodes reimagines Blender automation. Instead of linear procedural evaluation or dense scripting, Fx Nodes introduces an **asynchronous, event-driven control flow**:
 
-- **Unified Message Model (`msg`)**: Control wires pass a structured dictionary (`msg`). Every node enriches, transforms, or routes this payload (`msg.payload`, `msg.topic`).
+- **Unified Message Model (`msg`)**: Control wires pass a structured dictionary (`msg`). Every node enriches, transforms, or routes this payload (`msg["payload"]`, `msg["topic"]`).
 - **Animation Nodes Ergonomics**: Crafted with a clean, high-contrast aesthetic. All controls reside cleanly at the top of nodes, while **dynamic multi-line previews, JSON inspection, and error tracebacks render strictly below action buttons**—guaranteeing smooth interaction without UI layout shifts.
 - **Blender Native Integration**: Bind complex logic to Blender `Text` datablocks with one click. Copy any property path in Blender and press **`Shift+V`** to instantly create interactive Property nodes.
 - **Production-Grade Stability**: Protected by loop guards (`MAX_HOPS`), queue throttles (`MAX_QUEUE`), safe AST expression sandboxes, precise traceback line mapping, and strict execution preferences.
@@ -81,7 +81,7 @@ Guided by minimalist and professional UI standards, Fx Nodes features:
 - **Set Property**: Write expressions or message values directly to Blender objects, modifiers, materials, or world settings.
 
 ### 🔵 Logic (`Control flow & gates`)
-- **Switch**: Python condition routing (`msg.payload > 10` ──▶ `True` / `False`).
+- **Switch**: Python condition routing (`msg["payload"] > 10` ──▶ `True` / `False`).
 - **Gate**: Throttle, debounce, or pass every $N$-th signal.
 - **Counter**: Increment state across loops or frames.
 - **Delay**: Non-blocking asynchronous signal scheduling.
@@ -99,9 +99,9 @@ Guided by minimalist and professional UI standards, Fx Nodes features:
 - **Debug**: Pretty-print JSON data, log to Text datablocks, inspect types (`dict [4 keys]`, `list [12 items]`), and copy live payloads with one click.
 
 ### 🟣 AI (`Intelligent automation`)
-- **AI Chat**: Template prompts with live runtime variables (`{payload}`, `{flow.seed}`).
+- **AI Chat**: Template prompts with live runtime variables (`{payload}`, `{flow}` or explicit msg keys).
 - **AI → Expression**: Convert natural language requests into deterministic, syntax-validated sandboxed expressions.
-- **AI Scene Script**: Natural language to executable Blender Python automation. Previews code syntax, catches compilation errors, executes inside view overrides, and returns execution summaries to `msg.payload`.
+- **AI Scene Script**: Natural language to executable Blender Python automation. Previews code syntax, catches compilation errors, executes inside view overrides, and returns execution summaries to `msg["payload"]`.
 
 ---
 
@@ -125,14 +125,14 @@ Because visual nodes can execute code and modify scenes at 60 FPS, Fx Nodes enfo
 
 ## 💻 Developer API: Create a Node in 15 Lines
 
-Expanding Fx Nodes requires zero boilerplate. Subclass `FxLogicNode` and manipulate `signal.msg`:
+Expanding Fx Nodes requires zero boilerplate. Subclass `FxNodes` and manipulate `signal.msg`:
 
 ```python
-from Fx_nodes.core.base import FxLogicNode
+from Fx_nodes.core.base import FxNodes
 from Fx_nodes.core.registry import register_node
 
 @register_node
-class AddOneNode(FxLogicNode):
+class AddOneNode(FxNodes):
     bl_idname = "FxAddOne"
     bl_label = "Add One"
     category = "Logic"

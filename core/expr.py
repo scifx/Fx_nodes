@@ -12,10 +12,10 @@ Examples:
     sin(time) * amplitude
     clamp(value, 0, 1)
     "on" if frame % 2 == 0 else "off"
-    [x * 2 for x in msg.items]
-    msg.payload > 0
-    flow.counter >= 10
-    Global.foo == "bar"
+    [x * 2 for x in msg.get('items', [])]
+    msg['payload'] > 0
+    flow.get('counter', 0) >= 10
+    Global.get('foo') == "bar"
 """
 from __future__ import annotations
 
@@ -136,55 +136,9 @@ class _Missing:
 MISSING = _Missing()
 
 
-class _AttrDict(dict):
-    """Read-only-ish dict wrapper that supports ``msg.payload`` syntax.
-
-    Python dicts do not normally expose keys as attributes, but Node-RED users
-    naturally type ``msg.payload``/``flow.count`` in Switch and Expression
-    nodes.  Missing keys return a falsy sentinel so Switch conditions can fail
-    closed to the False output instead of stopping the flow.
-    """
-
-    def __getattribute__(self, name: str) -> Any:
-        # Prefer message keys over dict methods so msg.items / msg.keys etc.
-        # access user data when those keys exist.  If the key is absent, normal
-        # dict methods such as msg.get('x') still work.
-        if not name.startswith("_") and dict.__contains__(self, name):
-            return dict.__getitem__(self, name)
-        try:
-            return dict.__getattribute__(self, name)
-        except AttributeError:
-            if name.startswith("_"):
-                raise
-            return MISSING
-
-    def __getitem__(self, key: Any) -> Any:
-        return dict.get(self, key, MISSING)
-
-
-def _wrap(value: Any) -> Any:
-    if value is MISSING:
-        return value
-    if isinstance(value, _AttrDict):
-        return value
-    if isinstance(value, Mapping):
-        return _AttrDict({str(k): _wrap(v) for k, v in value.items()})
-    if isinstance(value, list):
-        return [_wrap(v) for v in value]
-    if isinstance(value, tuple):
-        return tuple(_wrap(v) for v in value)
-    return value
-
-
 def _unwrap(value: Any) -> Any:
     if value is MISSING:
         return None
-    if isinstance(value, _AttrDict):
-        return {k: _unwrap(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_unwrap(v) for v in value]
-    if isinstance(value, tuple):
-        return tuple(_unwrap(v) for v in value)
     return value
 
 
@@ -242,7 +196,10 @@ def evaluate(src: str, variables: Mapping[str, Any] | None = None) -> Any:
     env.update(SAFE_CONSTS)
     env.update(SAFE_FUNCS)
     if variables:
-        env.update({k: _wrap(v) for k, v in variables.items()})
+        # Keep msg/flow/Global as plain Python dicts.  The public expression API
+        # is explicit Python access: msg["payload"] or the convenience variable
+        # payload.  We intentionally do not emulate msg.payload.
+        env.update(dict(variables))
     try:
         return _unwrap(eval(code, env, {}))  # noqa: S307 - sandboxed: empty builtins + AST whitelist
     except ExprError:
